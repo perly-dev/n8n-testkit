@@ -1,0 +1,199 @@
+{
+  "workflow": "lead-intake.json",
+  "tests": [
+    {
+      "name": "an unsigned request is refused",
+      "node": "Refuse anything unsigned",
+      "env": {
+        "LEAD_WEBHOOK_SECRET": "un-segreto-lungo-per-la-prova"
+      },
+      "input": [
+        {
+          "headers": {},
+          "body": {
+            "email": "a@b.com"
+          }
+        }
+      ],
+      "throws": "missing or wrong x-webhook-key"
+    },
+    {
+      "name": "with no secret configured, nothing gets through",
+      "node": "Refuse anything unsigned",
+      "input": [
+        {
+          "headers": {
+            "x-webhook-key": "qualsiasi"
+          },
+          "body": {}
+        }
+      ],
+      "throws": "LEAD_WEBHOOK_SECRET"
+    },
+    {
+      "name": "a correctly signed request passes",
+      "node": "Refuse anything unsigned",
+      "env": {
+        "LEAD_WEBHOOK_SECRET": "un-segreto-lungo-per-la-prova"
+      },
+      "input": [
+        {
+          "headers": {
+            "x-webhook-key": "un-segreto-lungo-per-la-prova"
+          },
+          "body": {
+            "email": "a@b.com"
+          }
+        }
+      ],
+      "expect": [
+        {
+          "path": "length",
+          "value": 1
+        }
+      ]
+    },
+    {
+      "name": "a real website field is not mistaken for a bot trap",
+      "node": "Spot the junk, with a reason",
+      "input": [
+        {
+          "body": {
+            "email": "ok@azienda.it",
+            "website": "https://azienda.it",
+            "message": "Vorremmo capire se fa al caso nostro."
+          }
+        }
+      ],
+      "expect": [
+        {
+          "path": "0.json.junk",
+          "value": false,
+          "why": "plenty of real forms have a website field — rejecting those loses customers silently"
+        }
+      ]
+    },
+    {
+      "name": "\"Call me\" with a phone number is not junk",
+      "node": "Spot the junk, with a reason",
+      "input": [
+        {
+          "body": {
+            "email": "ok@azienda.it",
+            "phone": "+39 333 1234567",
+            "message": "Call me"
+          }
+        }
+      ],
+      "expect": [
+        {
+          "path": "0.json.junk",
+          "value": false
+        }
+      ]
+    },
+    {
+      "name": "a bot submission is rejected, with the reason recorded",
+      "node": "Spot the junk, with a reason",
+      "input": [
+        {
+          "body": {
+            "email": "a@b.com",
+            "_gotcha": "http://spam.example",
+            "message": "ciao come stai"
+          }
+        }
+      ],
+      "expect": [
+        {
+          "path": "0.json.junk",
+          "value": true
+        },
+        {
+          "path": "0.json.junk_reason",
+          "operator": "contains",
+          "value": "honeypot"
+        }
+      ]
+    },
+    {
+      "name": "an Italian number keeps the leading zero",
+      "node": "Normalise the lead",
+      "input": [
+        {
+          "phone": "02 1234567"
+        }
+      ],
+      "expect": [
+        {
+          "path": "0.json.phone",
+          "value": "+39021234567",
+          "why": "in Italy the zero is part of the number; stripping it the way the UK does produces a number that does not exist"
+        }
+      ]
+    },
+    {
+      "name": "awkward names stay readable",
+      "node": "Normalise the lead",
+      "input": [
+        {
+          "name": "anna de rossi"
+        },
+        {
+          "name": "sean o'brien"
+        },
+        {
+          "name": "anna-maria bianchi"
+        }
+      ],
+      "expect": [
+        {
+          "path": "0.json.last_name",
+          "value": "De Rossi"
+        },
+        {
+          "path": "1.json.last_name",
+          "value": "O'Brien"
+        },
+        {
+          "path": "2.json.first_name",
+          "value": "Anna-Maria"
+        }
+      ]
+    },
+    {
+      "name": "a formula never reaches the spreadsheet alive",
+      "node": "Make it safe for a spreadsheet",
+      "input": [
+        {
+          "first_name": "=HYPERLINK(\"http://cattivo\",\"clicca\")"
+        }
+      ],
+      "expect": [
+        {
+          "path": "0.json.first_name",
+          "operator": "matches",
+          "value": "^'=HYPERLINK",
+          "why": "Google Sheets writes in USER_ENTERED mode: a cell starting with = becomes a live formula"
+        }
+      ]
+    },
+    {
+      "name": "the protection reaches nested fields too",
+      "node": "Make it safe for a spreadsheet",
+      "input": [
+        {
+          "extra": {
+            "nota": "=1+1"
+          }
+        }
+      ],
+      "expect": [
+        {
+          "path": "0.json.extra.nota",
+          "value": "'=1+1"
+        }
+      ]
+    }
+  ]
+}
