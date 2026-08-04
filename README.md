@@ -13,11 +13,17 @@ lead-intake.json
 
   ✓ an unsigned request is refused (0ms)
   ✓ with no secret configured, nothing gets through (0ms)
-  ✓ a real "website" field is not mistaken for a bot trap (1ms)
+  ✓ a correctly signed request passes (0ms)
+  ✓ a real website field is not mistaken for a bot trap (1ms)
+  ✓ "Call me" with a phone number is not junk (0ms)
+  ✓ a bot submission is rejected, with the reason recorded (0ms)
   ✗ an Italian number keeps the leading zero
       0.json.phone  expected "+39021234567" (equals), got "+3921234567"
-      in Italy the zero is part of the number; stripping it the way the UK does
-      produces a number that does not exist
+      in Italy the zero is part of the number; stripping it the way the UK
+      does produces a number that does not exist
+  ✓ awkward names stay readable (0ms)
+  ✓ a formula never reaches the spreadsheet alive (0ms)
+  ✓ the protection reaches nested fields too (0ms)
 
   1 of 10 failed
 ```
@@ -57,10 +63,11 @@ npx n8n-testkit --nodes my-workflow.json
 ```
 
 ```
-Code nodes in «Capture and clean inbound web form leads»:
+Code nodes in «Capture and clean inbound web form leads with a secure webhook»:
 
   Refuse anything unsigned
   Spot the junk, with a reason
+  Keep three fields, safely
   Normalise the lead
   Make it safe for a spreadsheet
 ```

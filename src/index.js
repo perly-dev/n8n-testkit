@@ -50,7 +50,7 @@ export function eseguiProva(wf, prova) {
         return esito;
       }
       esito.failures.push({
-        messaggio: `expected a thrown error matching "${atteso}", got: ${e.message}`,
+        message: `expected a thrown error matching "${atteso}", got: ${e.message}`,
       });
       esito.ms = Date.now() - inizio;
       return esito;

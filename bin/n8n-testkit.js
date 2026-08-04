@@ -18,13 +18,25 @@ const ROSSO = '\x1b[31m', VERDE = '\x1b[32m', GRIGIO = '\x1b[90m', GRASSETTO = '
 const colora = process.stdout.isTTY && !process.env.NO_COLOR;
 const c = (col, t) => (colora ? col + t + FINE : t);
 
+/** Manda a capo un testo alla larghezza data, senza spezzare le parole. */
+function aCapo(testo, larghezza) {
+  const righe = [];
+  let riga = '';
+  for (const parola of String(testo).split(/\s+/).filter(Boolean)) {
+    if (riga && (riga + ' ' + parola).length > larghezza) { righe.push(riga); riga = parola; }
+    else riga = riga ? riga + ' ' + parola : parola;
+  }
+  if (riga) righe.push(riga);
+  return righe;
+}
+
 const argomenti = process.argv.slice(2);
 
 if (!argomenti.length || argomenti.includes('--help') || argomenti.includes('-h')) {
   console.log(`
 ${c(GRASSETTO, 'n8n-testkit')} — run your n8n workflow logic against fixtures
 
-  n8n-testkit <tests.json>              run the tests
+  n8n-testkit <tests.json>             run the tests
   n8n-testkit --nodes <workflow.json>  list the Code nodes you can test
 
 Exits with code 1 when any test fails, so it can gate a deploy.
@@ -39,10 +51,10 @@ if (argomenti[0] === '--nodes' || argomenti[0] === '--nodi') {
   const wf = caricaWorkflow(argomenti[1]);
   const nodi = nodiCode(wf);
   if (!nodi.length) {
-    console.log('Questo workflow non ha nodi Code: non c\'è logica tua da provare.');
+    console.log('This workflow has no Code nodes: there is no logic of yours to test.');
     process.exit(0);
   }
-  console.log(`\nNodi Code in «${wf.name || argomenti[1]}»:\n`);
+  console.log(`\nCode nodes in «${wf.name || argomenti[1]}»:\n`);
   for (const n of nodi) console.log(`  ${n}`);
   console.log('');
   process.exit(0);
@@ -78,12 +90,16 @@ for (const p of esito.esiti) {
   } else {
     console.log(`  ${c(ROSSO, '✗')} ${c(GRASSETTO, p.name)}`);
     for (const f of p.failures) {
-      if (f.path) {
+      if (f.path && f.operator) {
         console.log(`      ${c(GRIGIO, f.path)}  expected ${JSON.stringify(f.expected)} (${f.operator}), got ${JSON.stringify(f.got)}`);
+      } else if (f.path) {
+        console.log(`      ${c(GRIGIO, f.path)}  ${f.message}`);
       } else {
         console.log(`      ${f.message}`);
       }
-      if (f.message && f.path) console.log(`      ${c(GRIGIO, f.message)}`);
+      // Il «why» è il motivo per cui quel valore contava: è la sola riga utile a
+      // chi trova la build rossa fra sei mesi. Se non si stampa, non esiste.
+      if (f.why) for (const riga of aCapo(f.why, 72)) console.log(`      ${c(GRIGIO, riga)}`);
     }
   }
 }
