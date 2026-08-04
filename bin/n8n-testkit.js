@@ -47,8 +47,26 @@ Docs: https://github.com/perly-dev/n8n-testkit
   process.exit(0);
 }
 
+if (argomenti[0] === '--version' || argomenti[0] === '-v') {
+  const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+  console.log(pkg.version);
+  process.exit(0);
+}
+
 if (argomenti[0] === '--nodes' || argomenti[0] === '--nodi') {
-  const wf = caricaWorkflow(argomenti[1]);
+  if (!argomenti[1]) {
+    console.error(c(ROSSO, 'Which workflow? Usage: n8n-testkit --nodes <workflow.json>'));
+    process.exit(2);
+  }
+  let wf;
+  try {
+    wf = caricaWorkflow(argomenti[1]);
+  } catch (e) {
+    // Questo è il primo comando che il README suggerisce: qui uno stack trace
+    // dice a chi arriva che il programma è rotto, non il suo file.
+    console.error(c(ROSSO, e.message));
+    process.exit(2);
+  }
   const nodi = nodiCode(wf);
   if (!nodi.length) {
     console.log('This workflow has no Code nodes: there is no logic of yours to test.');
@@ -58,6 +76,11 @@ if (argomenti[0] === '--nodes' || argomenti[0] === '--nodi') {
   for (const n of nodi) console.log(`  ${n}`);
   console.log('');
   process.exit(0);
+}
+
+if (argomenti[0].startsWith('-')) {
+  console.error(c(ROSSO, `Unknown option "${argomenti[0]}". Try --help.`));
+  process.exit(2);
 }
 
 const percorsoProve = resolve(argomenti[0]);
@@ -77,7 +100,7 @@ try {
 
 let esito;
 try {
-  esito = eseguiSuite(suite, { base });
+  esito = await eseguiSuite(suite, { base });
 } catch (e) {
   console.error(c(ROSSO, e.message));
   process.exit(2);

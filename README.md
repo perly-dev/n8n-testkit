@@ -1,8 +1,8 @@
 # n8n-testkit
 
 Run the logic inside your n8n workflows against fixtures, and **fail the build when it
-regresses** — without an n8n instance, without credentials, without sending a single real
-email.
+regresses** — without an n8n instance and without credentials. Your Gmail, Sheets, HTTP and
+AI nodes never execute: only the JavaScript you wrote in the Code nodes does.
 
 ```bash
 npx n8n-testkit tests.json
@@ -38,8 +38,8 @@ node gets a new version — and the execution stays **green** while the data goi
 CRM turns to mush. You find out weeks later, from a customer.
 
 n8n's built-in evaluations compare a whole run against a dataset. Useful, but they need the
-workflow to actually run: real credentials, real side effects, real emails leaving your
-account. That is not something you put in a pipeline that runs on every change.
+workflow to actually run, which means credentials and careful isolation of every
+integration it touches. That is a lot to set up in a pipeline that runs on every change.
 
 This runs the **Code nodes** — the logic you wrote — on fixtures you control, asserts on
 the shape of what comes out, and exits non-zero when it drifts.
@@ -104,7 +104,7 @@ Run it. That is the whole loop.
 | `env` / `vars` | what `$env` and `$vars` should contain |
 | `now` | a fixed timestamp for `$now` — a test that depends on the clock fails at midnight and nobody knows why |
 | `expect` | the assertions |
-| `throws` | expect the node to **throw**, optionally matching a string |
+| `throws` | expect the node to **throw**; optionally, text the message must contain |
 
 ### `throws` — when failing is the correct behaviour
 
@@ -164,13 +164,17 @@ Read this before you trust it.
   Broken credentials will not be caught here.
 - **It does not follow the connections.** Each test runs one node with the input you supply.
   If you want to test a chain, feed one node's output into the next test yourself.
-- **Tests live beside the workflow, not inside it.** Rename a node or change a field and the
-  test keeps passing on stale assumptions until you update it. Same discipline as any test
-  suite.
+- **Tests live beside the workflow, not inside it.** Renaming a node you test fails the test
+  loudly, but a field you never assert on can change under you and stay green. Same
+  discipline as any test suite.
 - **It is not a sandbox.** Your workflow's code runs in this process, with whatever it can
-  reach. It is your workflow — this reproduces its behaviour, it does not defend against it.
-- **`$now` is a small stand-in**, not Luxon: `toISO()`, `toMillis()`, `toString()`. Code
-  doing Luxon arithmetic will need a real fixture instead.
+  reach: the network, the environment, the filesystem. It is your workflow — this reproduces
+  its behaviour, it does not defend against it. See *Use it in CI* below.
+- **`$now` and `$today` are small stand-ins**, not Luxon: `toISO()`, `toMillis()`,
+  `toString()`. `$today` is midnight UTC of the same day. Code doing Luxon arithmetic
+  (`plus`, `diff`, `startOf`) will need a real fixture instead.
+- **It runs JavaScript Code nodes, in "run once for all items" style.** Python Code nodes
+  and per-item mode are not reproduced.
 
 ## Use it in CI
 
@@ -180,6 +184,11 @@ Read this before you trust it.
 
 Non-zero exit on failure is the whole point: put it in front of the step that imports the
 workflow into production, and a regression stops there instead of in a customer's inbox.
+
+⚠️ **A workflow file is executable code.** This runs the Code nodes in the current process,
+so a workflow can read your CI environment — secrets included — and reach the network. Run
+it on workflows you trust, the way you already treat your own repository. Do not run it on
+workflow files that arrive from forks or untrusted pull requests.
 
 ## Licence
 

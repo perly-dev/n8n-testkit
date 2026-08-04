@@ -8,7 +8,7 @@
  * che è il controllo che ci è mancato quattro volte.
  */
 
-import { execFileSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdtempSync, cpSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -37,16 +37,13 @@ function contiene(testo, pezzo, cosa) {
   if (!testo.includes(pezzo)) throw new Error(`${cosa}: manca ${JSON.stringify(pezzo)}`);
 }
 
-/** Lancia la CLI e restituisce { uscita, codice } senza lanciare sul codice 1. */
+/** Lancia la CLI e restituisce { uscita, codice }. Cattura anche stderr: le
+ *  prove sugli errori devono leggerlo, non stamparlo in mezzo al rapporto. */
 function cli(argomenti, opzioni = {}) {
-  try {
-    const uscita = execFileSync(process.execPath, [CLI, ...argomenti], {
-      encoding: 'utf8', env: { ...process.env, NO_COLOR: '1' }, ...opzioni,
-    });
-    return { uscita, codice: 0 };
-  } catch (e) {
-    return { uscita: (e.stdout || '') + (e.stderr || ''), codice: e.status };
-  }
+  const r = spawnSync(process.execPath, [CLI, ...argomenti], {
+    encoding: 'utf8', env: { ...process.env, NO_COLOR: '1' }, ...opzioni,
+  });
+  return { uscita: (r.stdout || '') + (r.stderr || ''), codice: r.status };
 }
 
 /** Copia gli esempi in una cartella usa-e-getta, così le mutazioni non toccano il repo. */
@@ -96,7 +93,7 @@ prova('un «throws» che non corrisponde dice cosa è successo, non «undefined�
   }));
   const { uscita, codice } = cli([join(dir, 't.json')]);
   uguale(codice, 1, 'codice di uscita');
-  contiene(uscita, 'expected a thrown error matching', 'messaggio');
+  contiene(uscita, 'expected the error message to contain', 'messaggio');
   if (uscita.includes('undefined')) throw new Error('stampa «undefined» al posto del messaggio');
 });
 
@@ -120,6 +117,114 @@ prova('--nodes elenca i nodi Code del workflow di esempio', () => {
   uguale(codice, 0, 'codice di uscita');
   contiene(uscita, 'Code nodes in', 'intestazione');
   contiene(uscita, 'Refuse anything unsigned', 'primo nodo');
+});
+
+// ── Semantica, non solo nomi ─────────────────────────────────────────────────
+// Codex ha fatto notare che provare l'ESISTENZA degli operatori lascia passare
+// un operatore che c'è e sbaglia. Qui si prova cosa fanno.
+
+/** Costruisce al volo un workflow di un nodo solo e ci lancia delle prove. */
+function conNodo(jsCode, tests, parametri = {}) {
+  const dir = cartellaDiProva();
+  writeFileSync(join(dir, 'wf.json'), JSON.stringify({
+    name: 'ad hoc',
+    nodes: [{ name: 'N', type: 'n8n-nodes-base.code', parameters: { jsCode, ...parametri } }],
+  }));
+  writeFileSync(join(dir, 't.json'), JSON.stringify({ workflow: 'wf.json', tests }));
+  return cli([join(dir, 't.json')]);
+}
+
+prova('«equals» è un confronto profondo, non un confronto di testo JSON', () => {
+  // Le stesse chiavi in ordine diverso sono lo stesso oggetto. In n8n l'ordine
+  // dipende da come il nodo ha costruito il json: confrontarlo dava rossi a caso.
+  const { codice } = conNodo('return [{json:{o:{b:2,a:1}}}];',
+    [{ name: 'ordine diverso', node: 'N', input: [{}], expect: [{ path: '0.json.o', value: { a: 1, b: 2 } }] }]);
+  uguale(codice, 0, 'codice di uscita');
+});
+
+prova('«equals» distingue ancora valori davvero diversi', () => {
+  const { codice } = conNodo('return [{json:{n:1}}];',
+    [{ name: 'numero contro testo', node: 'N', input: [{}], expect: [{ path: '0.json.n', value: '1' }] }]);
+  uguale(codice, 1, 'codice di uscita');
+});
+
+prova('«throws» confronta testo letterale, non un\'espressione regolare', () => {
+  // «cost [EUR] missing» come regex non corrisponde a se stesso: il rapporto
+  // mostrava due stringhe identiche e la prova rossa.
+  const { codice } = conNodo("throw new Error('cost [EUR] missing');",
+    [{ name: 'parentesi quadre', node: 'N', input: [{}], throws: 'cost [EUR] missing' }]);
+  uguale(codice, 0, 'codice di uscita');
+});
+
+prova('un «throw» di una stringa nuda mostra la stringa, non «undefined»', () => {
+  const { uscita } = conNodo("throw 'stringa nuda';",
+    [{ name: 'stringa nuda', node: 'N', input: [{}] }]);
+  contiene(uscita, 'stringa nuda', 'messaggio');
+  if (uscita.includes('undefined')) throw new Error('stampa «undefined»');
+});
+
+prova('due nodi con lo stesso nome vengono rifiutati invece di sceglierne uno', () => {
+  const dir = cartellaDiProva();
+  writeFileSync(join(dir, 'wf.json'), JSON.stringify({
+    name: 'doppio',
+    nodes: [
+      { name: 'D', type: 'n8n-nodes-base.code', parameters: { jsCode: "return [{json:{q:'primo'}}];" } },
+      { name: 'D', type: 'n8n-nodes-base.code', parameters: { jsCode: "return [{json:{q:'secondo'}}];" } },
+    ],
+  }));
+  writeFileSync(join(dir, 't.json'), JSON.stringify({ workflow: 'wf.json',
+    tests: [{ name: 'ambiguo', node: 'D', input: [{}], expect: [{ path: '0.json.q', value: 'primo' }] }] }));
+  const { uscita, codice } = cli([join(dir, 't.json')]);
+  uguale(codice, 1, 'codice di uscita');
+  contiene(uscita, 'no way to tell which one you mean', 'messaggio di ambiguità');
+});
+
+prova('una prova scritta male non porta giù le altre', () => {
+  const { uscita, codice } = conNodo('return [{json:{ok:1}}];', [
+    { name: 'buona', node: 'N', input: [{}], expect: [{ path: '0.json.ok', value: 1 }] },
+    { name: 'malformata', node: 'N', input: {} },
+  ]);
+  uguale(codice, 1, 'codice di uscita');
+  contiene(uscita, '✓ buona', 'la prova buona deve essere stata eseguita lo stesso');
+  contiene(uscita, '"input" must be an array', 'spiegazione');
+});
+
+prova('un Code node che usa «await» gira davvero', () => {
+  const { codice } = conNodo('const x = await Promise.resolve(7);\nreturn [{json:{x}}];',
+    [{ name: 'await', node: 'N', input: [{}], expect: [{ path: '0.json.x', value: 7 }] }]);
+  uguale(codice, 0, 'codice di uscita');
+});
+
+prova('la modalità «once for each item» esegue il codice su ogni elemento', () => {
+  const { codice } = conNodo('return {json:{v:$json.a*2}};',
+    [{ name: 'per item', node: 'N', input: [{ a: 2 }, { a: 5 }], expect: [
+      { path: '0.json.v', value: 4 }, { path: '1.json.v', value: 10 }] }],
+    { mode: 'runOnceForEachItem' });
+  uguale(codice, 0, 'codice di uscita');
+});
+
+prova('«$today» è la mezzanotte del giorno, non l\'istante di «$now»', () => {
+  const { codice } = conNodo('return [{json:{t:$today.toISO()}}];',
+    [{ name: 'today', node: 'N', input: [{}], now: '2020-06-15T12:30:00.000Z',
+       expect: [{ path: '0.json.t', value: '2020-06-15T00:00:00.000Z' }] }]);
+  uguale(codice, 0, 'codice di uscita');
+});
+
+prova('la riga di comando non mostra mai uno stack trace a chi sbaglia un file', () => {
+  for (const argomenti of [['--nodes', 'non-esiste.json'], ['non-esiste.json'], ['--nodes']]) {
+    const { uscita, codice } = cli(argomenti);
+    uguale(codice, 2, `codice di uscita per ${argomenti.join(' ')}`);
+    if (/\bat \w+.*\(.*:\d+:\d+\)/.test(uscita) || uscita.includes('node:internal')) {
+      throw new Error(`stack trace mostrato per «${argomenti.join(' ')}»: ${uscita.slice(0, 120)}`);
+    }
+  }
+});
+
+prova('--version stampa la versione del package.json', () => {
+  const pkg = JSON.parse(readFileSync(join(RADICE, 'package.json'), 'utf8'));
+  const { uscita, codice } = cli(['--version']);
+  uguale(codice, 0, 'codice di uscita');
+  uguale(uscita.trim(), pkg.version, 'versione');
 });
 
 // ── Documento contro codice ──────────────────────────────────────────────────
@@ -180,7 +285,7 @@ prova('il nome del workflow citato nel README è quello vero', () => {
 prova('le frasi che il README cita fra virgolette esistono nel codice', () => {
   const citazioni = [
     'it no longer protects anything',
-    'expected a thrown error matching',
+    'expected the error message to contain',
   ];
   const sorgente = ['src/index.js', 'src/asserzioni.js', 'src/ambiente.js', 'bin/n8n-testkit.js']
     .map((f) => readFileSync(join(RADICE, f), 'utf8')).join('\n');
@@ -210,6 +315,39 @@ prova('$now espone esattamente i metodi che il README dichiara', () => {
   }));
   const { codice } = cli([join(dir, 't.json')]);
   uguale(codice, 0, 'codice di uscita');
+});
+
+// Questa prova installa il pacchetto e ne lancia il banco. Quel banco contiene
+// questa stessa prova: senza la sentinella si impacchetterebbe all'infinito.
+// Nel giro annidato viene dichiarata saltata, non silenziosamente omessa.
+if (process.env.N8N_TESTKIT_BANCO_ANNIDATO) {
+  console.log('  — il pacchetto vero, impacchettato e installato (già provato dal giro esterno)');
+} else prova('il pacchetto vero, impacchettato e installato, funziona una volta installato', () => {
+  // Fin qui si è provato il bin del repository. Quello che finisce agli utenti è
+  // il tarball, e «files» decide cosa ci entra: una dimenticanza lì non si vede
+  // in nessun'altra prova.
+  const dir = mkdtempSync(join(tmpdir(), 'n8n-testkit-pack-'));
+  const pack = spawnSync('npm', ['pack', '--pack-destination', dir], { cwd: RADICE, encoding: 'utf8' });
+  if (pack.status !== 0) throw new Error(`npm pack non riuscito: ${pack.stderr}`);
+  const tgz = join(dir, pack.stdout.trim().split('\n').pop());
+  const progetto = mkdtempSync(join(tmpdir(), 'n8n-testkit-uso-'));
+  writeFileSync(join(progetto, 'package.json'), '{"name":"prova","version":"1.0.0"}');
+  const inst = spawnSync('npm', ['install', '--no-audit', '--no-fund', tgz], { cwd: progetto, encoding: 'utf8' });
+  if (inst.status !== 0) throw new Error(`npm install non riuscito: ${inst.stderr}`);
+  cpSync(join(RADICE, 'esempi'), progetto, { recursive: true });
+  // Il binario installato, non «npx»: npx può fermarsi a chiedere conferma o
+  // andare in rete, e una prova che aspetta un umano non è una prova.
+  const eseguibile = join(progetto, 'node_modules', '.bin', 'n8n-testkit');
+  const eseguito = spawnSync(eseguibile, ['tests-lead-intake.json'],
+    { cwd: progetto, encoding: 'utf8', env: { ...process.env, NO_COLOR: '1' } });
+  uguale(eseguito.status, 0, 'codice di uscita del pacchetto installato');
+  contiene(eseguito.stdout, '10 of 10 passed', 'riepilogo');
+  // e il suo «npm test» deve girare: se «files» dimentica test/ o esempi/, no.
+  const suo = spawnSync('npm', ['test'], {
+    cwd: join(progetto, 'node_modules', 'n8n-testkit'), encoding: 'utf8',
+    env: { ...process.env, N8N_TESTKIT_BANCO_ANNIDATO: '1' },
+  });
+  uguale(suo.status, 0, `npm test dentro il pacchetto installato: ${(suo.stdout || '').slice(-300)}`);
 });
 
 console.log('');

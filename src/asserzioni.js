@@ -6,6 +6,19 @@
  * dichiara: percorso del campo, operatore, valore atteso.
  */
 
+import { isDeepStrictEqual } from 'node:util';
+
+/**
+ * Il messaggio di una cosa lanciata. In JavaScript si può lanciare qualunque
+ * cosa: `throw 'testo'` non ha `.message`, e leggerlo dava «undefined» — che è
+ * il modo peggiore di raccontare un guasto a chi sta cercando di capirlo.
+ */
+export function motivo(e) {
+  if (e instanceof Error) return e.message;
+  if (typeof e === 'string') return e;
+  try { return JSON.stringify(e); } catch { return String(e); }
+}
+
 /** Legge «0.json.category» dentro il risultato, senza esplodere sui pezzi mancanti. */
 export function leggiPercorso(dati, percorso) {
   return String(percorso).split('.').reduce((acc, chiave) => {
@@ -14,9 +27,14 @@ export function leggiPercorso(dati, percorso) {
   }, dati);
 }
 
+// Confronto profondo vero. Con JSON.stringify due oggetti identici ma con le
+// chiavi in ordine diverso risultavano diversi — e in n8n l'ordine delle chiavi
+// dipende da come il nodo le ha costruite, quindi era un rosso a caso.
+const uguali = (a, b) => isDeepStrictEqual(a, b);
+
 const OPERATORI = {
-  equals: (a, b) => JSON.stringify(a) === JSON.stringify(b),
-  notEquals: (a, b) => JSON.stringify(a) !== JSON.stringify(b),
+  equals: (a, b) => uguali(a, b),
+  notEquals: (a, b) => !uguali(a, b),
   contains: (a, b) => String(a ?? '').includes(String(b)),
   notContains: (a, b) => !String(a ?? '').includes(String(b)),
   matches: (a, b) => new RegExp(b).test(String(a ?? '')),
@@ -28,7 +46,7 @@ const OPERATORI = {
   between: (a, [min, max]) => Number(a) >= min && Number(a) <= max,
   greaterThan: (a, b) => Number(a) > Number(b),
   lessThan: (a, b) => Number(a) < Number(b),
-  oneOf: (a, b) => (Array.isArray(b) ? b : [b]).some((x) => JSON.stringify(x) === JSON.stringify(a)),
+  oneOf: (a, b) => (Array.isArray(b) ? b : [b]).some((x) => uguali(x, a)),
   length: (a, b) => (a?.length ?? -1) === b,
 };
 
@@ -47,6 +65,7 @@ export function verifica(risultato, asserzioni = []) {
       fallimenti.push({
         path: a.path,
         message: `unknown operator "${op}". Available: ${operatoriDisponibili.join(', ')}`,
+        why: a.why || null,
       });
       continue;
     }
@@ -55,7 +74,11 @@ export function verifica(risultato, asserzioni = []) {
     try {
       passa = fn(ottenuto, a.value);
     } catch (e) {
-      fallimenti.push({ path: a.path, message: `the assertion itself threw: ${e.message}` });
+      fallimenti.push({
+        path: a.path,
+        message: `the assertion itself threw: ${motivo(e)}`,
+        why: a.why || null,
+      });
       continue;
     }
     if (!passa) {

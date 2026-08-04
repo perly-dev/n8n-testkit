@@ -32,7 +32,7 @@ export function caricaWorkflow(percorso) {
 
 /** I nodi veri, senza le note adesive. */
 export function nodiDiLavoro(wf) {
-  return wf.nodes.filter((n) => n.type !== STICKY);
+  return wf.nodes.filter((n) => n && n.type !== STICKY);
 }
 
 /**
@@ -43,7 +43,18 @@ export function nodiDiLavoro(wf) {
  * risolve in due secondi.
  */
 export function codiceDelNodo(wf, nome) {
-  const n = wf.nodes.find((x) => x.name === nome);
+  const trovati = wf.nodes.filter((x) => x && x.name === nome);
+  // Due nodi con lo stesso nome: n8n lo permette, e prima vinceva il primo in
+  // silenzio. Una prova che gira su un nodo diverso da quello che credi è
+  // peggio di una prova che non gira.
+  if (trovati.length > 1) {
+    throw new Error(
+      `This workflow has ${trovati.length} nodes called "${nome}", so there is no way ` +
+      `to tell which one you mean. Rename them on the canvas — n8n allows the clash, ` +
+      `this does not.`
+    );
+  }
+  const n = trovati[0];
   if (!n) {
     const disponibili = nodiDiLavoro(wf).map((x) => `"${x.name}"`).join(', ');
     throw new Error(`No node called "${nome}" in this workflow. There is: ${disponibili}`);
@@ -54,12 +65,19 @@ export function codiceDelNodo(wf, nome) {
       `This tool tests the logic you wrote, not calls to external services.`
     );
   }
-  const codice = (n.parameters || {}).jsCode;
+  const parametri = n.parameters || {};
+  if (parametri.pythonCode && !parametri.jsCode) {
+    throw new Error(
+      `Code node "${nome}" is written in Python, which this tool does not run. ` +
+      `It reproduces the JavaScript Code node only.`
+    );
+  }
+  const codice = parametri.jsCode;
   if (!codice) throw new Error(`Code node "${nome}" is empty.`);
-  return codice;
+  return { codice, perItem: parametri.mode === 'runOnceForEachItem' };
 }
 
 /** Tutti i nodi Code: serve a suggerire cosa si può provare. */
 export function nodiCode(wf) {
-  return wf.nodes.filter((n) => n.type === CODE).map((n) => n.name);
+  return wf.nodes.filter((n) => n && n.type === CODE).map((n) => n.name);
 }

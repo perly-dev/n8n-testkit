@@ -25,6 +25,7 @@ export function comeItem(x) {
  *                                    fallisce a mezzanotte e nessuno capisce perché
  */
 export function creaAmbiente({ input = [], nodi = {}, env = {}, vars = {}, adesso } = {}) {
+  if (!Array.isArray(input)) throw new Error('"input" must be an array of items');
   const elementi = input.map(comeItem);
   const istante = adesso ? new Date(adesso) : null;
 
@@ -65,9 +66,20 @@ export function creaAmbiente({ input = [], nodi = {}, env = {}, vars = {}, adess
     valueOf: () => base.getTime(),
   };
 
+  // $today in n8n è l'inizio del giorno, non «adesso». Restituire $now faceva
+  // passare prove che in produzione si comportano in un altro modo.
+  const mezzanotte = new Date(base);
+  mezzanotte.setUTCHours(0, 0, 0, 0);
+  const $today = {
+    toISO: () => mezzanotte.toISOString(),
+    toString: () => mezzanotte.toISOString(),
+    toMillis: () => mezzanotte.getTime(),
+    valueOf: () => mezzanotte.getTime(),
+  };
+
   return {
     $input, $, $env: env, $vars: vars, $now,
-    $today: $now,
+    $today,
     $execution: { id: 'test', mode: 'test', resumeUrl: '' },
     $workflow: { id: 'test', name: 'test', active: false },
     $runIndex: 0,
@@ -82,17 +94,40 @@ export function creaAmbiente({ input = [], nodi = {}, env = {}, vars = {}, adess
  * una sandbox di sicurezza e non pretende di esserlo — stai eseguendo un
  * workflow che è già tuo. Serve a riprodurre il comportamento, non a difendersi.
  */
-export function eseguiNodoCode(codice, ambiente) {
+// I Code node di n8n possono usare «await», e molti lo fanno. Compilandoli come
+// funzione normale fallivano con «await is only valid in async functions»: un
+// messaggio che fa sembrare rotto lo strumento invece del workflow.
+const FunzioneAsync = Object.getPrototypeOf(async function () {}).constructor;
+
+export async function eseguiNodoCode(codice, ambiente) {
   const nomi = Object.keys(ambiente);
   const valori = nomi.map((n) => ambiente[n]);
   let fn;
   try {
-    fn = new Function(...nomi, codice);
+    fn = new FunzioneAsync(...nomi, codice);
   } catch (e) {
     throw new Error(`The node's code does not compile: ${e.message}`);
   }
-  const uscita = fn(...valori);
+  const uscita = await fn(...valori);
   // n8n accetta sia un array di item sia un singolo item.
   if (uscita === undefined || uscita === null) return [];
   return (Array.isArray(uscita) ? uscita : [uscita]).map(comeItem);
+}
+
+/**
+ * La modalità «Run once for each item»: n8n esegue il codice una volta per
+ * elemento, con $json che punta all'elemento corrente, e si aspetta un item
+ * solo per volta. Senza questo, quei nodi fallivano con «$json is not defined».
+ */
+export async function eseguiNodoPerItem(codice, opzioni = {}) {
+  const elementi = (opzioni.input || []).map(comeItem);
+  const uscita = [];
+  for (let i = 0; i < elementi.length; i++) {
+    const ambiente = creaAmbiente({ ...opzioni, input: [elementi[i]] });
+    ambiente.$json = elementi[i].json;
+    ambiente.$itemIndex = i;
+    const risultato = await eseguiNodoCode(codice, ambiente);
+    uscita.push(...risultato);
+  }
+  return uscita;
 }
