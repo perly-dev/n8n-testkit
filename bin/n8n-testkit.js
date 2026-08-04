@@ -48,7 +48,11 @@ Docs: https://github.com/perly-dev/n8n-testkit
   process.exit(0);
 }
 
-const vuoleAiuto = argomenti.includes('--help') || argomenti.includes('-h');
+// Quello che segue «--» sono percorsi, sempre: senza questo, un file chiamato
+// «--version» faceva stampare la versione invece di essere provato.
+const dopoSeparatore = argomenti.indexOf('--');
+const soloOpzioni = dopoSeparatore === -1 ? argomenti : argomenti.slice(0, dopoSeparatore);
+const vuoleAiuto = soloOpzioni.includes('--help') || soloOpzioni.includes('-h');
 if (!argomenti.length) aiuto();
 
 // Gli argomenti si controllano PRIMA di scegliere il comando: prima
@@ -59,7 +63,7 @@ if (!argomenti.length) aiuto();
 const CONOSCIUTE = new Set(['--help', '-h', '--version', '-v', '--nodes', '--nodi']);
 const attese = { '--help': 0, '-h': 0, '--version': 0, '-v': 0, '--nodes': 1, '--nodi': 1 };
 {
-  const comando = CONOSCIUTE.has(argomenti[0]) ? argomenti[0] : null;
+  const comando = (dopoSeparatore !== 0 && CONOSCIUTE.has(argomenti[0])) ? argomenti[0] : null;
   const resto = comando ? argomenti.slice(1) : argomenti;
   // «--» separa le opzioni dai percorsi, per il file che comincia per trattino.
   const separatore = resto.indexOf('--');
@@ -90,13 +94,16 @@ const attese = { '--help': 0, '-h': 0, '--version': 0, '-v': 0, '--nodes': 1, '-
 
 if (vuoleAiuto) aiuto();
 
-if (argomenti[0] === '--version' || argomenti[0] === '-v') {
+// Dopo «--» c'è un percorso, anche se si chiama come un'opzione.
+const soloFile = dopoSeparatore === 0;
+
+if (!soloFile && (argomenti[0] === '--version' || argomenti[0] === '-v')) {
   const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
   console.log(pkg.version);
   process.exit(0);
 }
 
-if (argomenti[0] === '--nodes' || argomenti[0] === '--nodi') {
+if (!soloFile && (argomenti[0] === '--nodes' || argomenti[0] === '--nodi')) {
   if (!argomenti[1]) {
     console.error(c(ROSSO, 'Which workflow? Usage: n8n-testkit --nodes <workflow.json>'));
     process.exit(2);

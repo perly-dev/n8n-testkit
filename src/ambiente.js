@@ -131,8 +131,11 @@ export async function eseguiNodoCode(codice, ambiente, { singolo = false } = {})
     );
   }
   // n8n accetta sia un array di item sia un singolo item.
-  const elenco = Array.isArray(uscita) ? uscita : [uscita];
-  return elenco.map((x, i) => validaItem(x, i));
+  // Su un singolo oggetto n8n è più indulgente con le chiavi in più che sulla
+  // forma canonica ad array: qui si preferisce non inventare un rosso.
+  const soloUno = !Array.isArray(uscita);
+  const elenco = soloUno ? [uscita] : uscita;
+  return elenco.map((x, i) => validaItem(x, i, soloUno));
 }
 
 /** Un oggetto semplice: né array, né Date, né null — la nozione che usa n8n. */
@@ -150,7 +153,7 @@ const descrivi = (v) => {
 // un «json» dimenticato: { risultato: ... } invece di { json: { risultato: ... } }.
 const CHIAVI = new Set(['json', 'binary', 'pairedItem', 'error', 'index']);
 
-function validaItem(x, i) {
+function validaItem(x, i, soloUno = false) {
   if (!oggettoSemplice(x)) {
     throw new Error(
       `Item ${i} of what this node returned is ${descrivi(x)}, not an object. ` +
@@ -162,12 +165,12 @@ function validaItem(x, i) {
     throw new Error(`Item ${i} has a "json" that is ${descrivi(item.json)}, not an object. ` +
                     `n8n expects { json: { ... } }.`);
   }
-  if ('binary' in item && !oggettoSemplice(item.binary)) {
+  if (item.binary !== undefined && !oggettoSemplice(item.binary)) {
     throw new Error(`Item ${i} has a "binary" that is ${descrivi(item.binary)}, not an object.`);
   }
   // Solo se l'item è già nella forma n8n: un oggetto nudo viene avvolto da
   // comeItem e le sue chiavi sono legittimamente dentro "json".
-  if ('json' in x) {
+  if ('json' in x && !soloUno) {
     const estranee = Object.keys(x).filter((k) => !CHIAVI.has(k));
     if (estranee.length) {
       throw new Error(
@@ -190,8 +193,13 @@ function validaItem(x, i) {
  * runtime lasciava verde un nodo che n8n si rifiuta di far partire.
  */
 export function vietatiPerItem(codice) {
+  // I commenti non contano: «// $input.all()» è una nota, non una chiamata, e
+  // rifiutarla sarebbe un rosso che l'utente non può spiegarsi.
+  const senzaCommenti = String(codice)
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/(^|[^:])\/\/[^\n]*/g, '$1');
   for (const metodo of ['all', 'first', 'last', 'itemMatching']) {
-    if (new RegExp(`\\$input\\s*\\.\\s*${metodo}\\s*\\(`).test(codice)) return metodo;
+    if (new RegExp(`\\$input\\s*\\.\\s*${metodo}\\s*\\(`).test(senzaCommenti)) return metodo;
   }
   return null;
 }

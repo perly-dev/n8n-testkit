@@ -297,6 +297,30 @@ prova('«--» permette di provare un file il cui nome comincia per trattino', ()
   uguale(senza.codice, 2, 'codice di uscita senza --');
 });
 
+prova('dopo «--» anche un nome che sembra un\'opzione è trattato come file', () => {
+  const dir = cartellaDiProva();
+  cpSync(join(dir, 'tests-lead-intake.json'), join(dir, '--version'));
+  const { uscita, codice } = cli(['--', '--version'], { cwd: dir });
+  uguale(codice, 0, 'codice di uscita');
+  contiene(uscita, '10 of 10 passed', 'deve aver eseguito il file, non stampato la versione');
+});
+
+prova('un commento che nomina un metodo vietato non fa fallire il nodo per-item', () => {
+  // Rifiutare «// $input.all()» sarebbe un rosso che nessuno può spiegarsi.
+  for (const commento of ['// $input.all()', '/* $input.all() */']) {
+    const { codice } = conNodo(`${commento}\nreturn {json:{ok:true}};`,
+      [{ name: commento, node: 'N', input: [{ a: 1 }], expect: [{ path: '0.json.ok', value: true }] }],
+      { mode: 'runOnceForEachItem' });
+    uguale(codice, 0, `codice di uscita per «${commento}»`);
+  }
+});
+
+prova('«binary: undefined» non è un errore', () => {
+  const { codice } = conNodo('return [{json:{a:1}, binary:undefined}];',
+    [{ name: 'binary undefined', node: 'N', input: [{}], expect: [{ path: '0.json.a', value: 1 }] }]);
+  uguale(codice, 0, 'codice di uscita');
+});
+
 prova('un\'opzione nota di troppo non viene eseguita a metà', () => {
   for (const argomenti of [['--help', '--version'], ['--nodes', '--version', 'x.json'], ['--version', '-v']]) {
     const { codice } = cli(argomenti);
