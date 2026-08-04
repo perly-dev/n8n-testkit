@@ -112,7 +112,16 @@ export async function eseguiNodoCode(codice, ambiente, { singolo = false } = {})
     throw new Error(`The node's code does not compile: ${e.message}`);
   }
   const uscita = await fn(...valori);
-  if (uscita === undefined || uscita === null) return [];
+
+  // n8n pretende degli ITEM. Accettare null, un numero o un json che non è un
+  // oggetto lasciava passare del codice che in produzione fallisce: lo stesso
+  // guasto silenzioso che questo strumento esiste per smascherare.
+  if (uscita === undefined || uscita === null) {
+    throw new Error(
+      `This node returned ${String(uscita)} instead of items. ` +
+      `To emit nothing, return an empty list: return [];`
+    );
+  }
   // In modalità per-item n8n pretende UN elemento per esecuzione. Appiattendo un
   // array, due elementi in ingresso ne producevano quattro in uscita, tutti verdi.
   if (singolo && Array.isArray(uscita)) {
@@ -122,7 +131,23 @@ export async function eseguiNodoCode(codice, ambiente, { singolo = false } = {})
     );
   }
   // n8n accetta sia un array di item sia un singolo item.
-  return (Array.isArray(uscita) ? uscita : [uscita]).map(comeItem);
+  const elenco = Array.isArray(uscita) ? uscita : [uscita];
+  return elenco.map((x, i) => {
+    if (x === null || typeof x !== 'object') {
+      throw new Error(
+        `Item ${i} of what this node returned is ${x === null ? 'null' : `a ${typeof x}`}, ` +
+        `not an object. n8n expects items like { json: { ... } }.`
+      );
+    }
+    const item = comeItem(x);
+    if (item.json === null || typeof item.json !== 'object') {
+      throw new Error(
+        `Item ${i} has a "json" that is ${item.json === null ? 'null' : `a ${typeof item.json}`}, ` +
+        `not an object. n8n expects { json: { ... } }.`
+      );
+    }
+    return item;
+  });
 }
 
 /**

@@ -221,6 +221,78 @@ prova('in modalità per-item, restituire un array è rifiutato', () => {
   contiene(uscita, 'must return a single item', 'messaggio');
 });
 
+prova('tutti e quattro i metodi vietati di $input lanciano in per-item', () => {
+  for (const metodo of ['all()', 'first()', 'last()', 'itemMatching(0)']) {
+    const { uscita, codice } = conNodo(`return {json:{v:$input.${metodo}}};`,
+      [{ name: metodo, node: 'N', input: [{ a: 1 }], expect: [] }], { mode: 'runOnceForEachItem' });
+    uguale(codice, 1, `codice di uscita per $input.${metodo}`);
+    contiene(uscita, "Can't use $input.", `messaggio per $input.${metodo}`);
+  }
+});
+
+prova('un nodo che non restituisce item viene rifiutato, come lo rifiuta n8n', () => {
+  const casi = [
+    ['return null;', 'instead of items'],
+    ['return undefined;', 'instead of items'],
+    ['return 7;', 'not an object'],
+    ['return {json:7};', 'not an object'],
+    ['return ["testo"];', 'not an object'],
+  ];
+  for (const [codiceNodo, atteso] of casi) {
+    const { uscita, codice } = conNodo(codiceNodo, [{ name: codiceNodo, node: 'N', input: [{}], expect: [] }]);
+    uguale(codice, 1, `codice di uscita per «${codiceNodo}»`);
+    contiene(uscita, atteso, `messaggio per «${codiceNodo}»`);
+  }
+});
+
+prova('«return []» resta legittimo: un filtro può non lasciar passare niente', () => {
+  const { codice } = conNodo('return [];', [{ name: 'niente', node: 'N', input: [{}], expect: [] }]);
+  uguale(codice, 0, 'codice di uscita');
+});
+
+prova('un nome condiviso con un nodo NON Code è escluso, non offerto', () => {
+  // --nodes e l'esecuzione devono dire la stessa cosa: prima --nodes lo
+  // presentava come provabile e poi l'esecuzione lo rifiutava.
+  const dir = cartellaDiProva();
+  writeFileSync(join(dir, 'wf.json'), JSON.stringify({
+    name: 'collisione',
+    nodes: [
+      { name: 'X', type: 'n8n-nodes-base.code', parameters: { jsCode: 'return [{json:{ok:1}}];' } },
+      { name: 'X', type: 'n8n-nodes-base.httpRequest', parameters: {} },
+    ],
+  }));
+  const { uscita } = cli(['--nodes', join(dir, 'wf.json')]);
+  const provabili = uscita.split('Not testable here')[0];
+  if (provabili.includes('X')) throw new Error('«X» presentato come provabile pur essendo ambiguo');
+  contiene(uscita, 'share this name', 'motivo');
+});
+
+prova('nessun comando ignora un argomento sbagliato', () => {
+  const dir = cartellaDiProva();
+  const suite = join(RADICE, 'esempi', 'tests-lead-intake.json');
+  const casi = [
+    ['--nodes', join(dir, 'lead-intake.json'), '--bogus'],
+    ['--version', '--bogus'],
+    ['--help', '--bogus'],
+    ['--nodes', join(dir, 'lead-intake.json'), 'in-piu.json'],
+    [suite, '--bogus'],
+    [suite, suite],
+  ];
+  for (const argomenti of casi) {
+    const { codice } = cli(argomenti);
+    uguale(codice, 2, `codice di uscita per «${argomenti.join(' ')}»`);
+  }
+});
+
+prova('«--» permette di provare un file il cui nome comincia per trattino', () => {
+  const dir = cartellaDiProva();
+  const strano = join(dir, '-tests.json');
+  cpSync(join(dir, 'tests-lead-intake.json'), strano);
+  const { uscita, codice } = cli(['--', strano]);
+  uguale(codice, 0, 'codice di uscita');
+  contiene(uscita, '10 of 10 passed', 'riepilogo');
+});
+
 prova('un nodo impostato su Python non esegue il jsCode rimasto dentro', () => {
   const { uscita, codice } = conNodo("return [{json:{lingua:'javascript'}}];",
     [{ name: 'python', node: 'N', input: [{}], expect: [{ path: '0.json.lingua', value: 'javascript' }] }],

@@ -32,12 +32,12 @@ function aCapo(testo, larghezza) {
 
 const argomenti = process.argv.slice(2);
 
-if (!argomenti.length || argomenti.includes('--help') || argomenti.includes('-h')) {
+function aiuto() {
   console.log(`
 ${c(GRASSETTO, 'n8n-testkit')} — run your n8n workflow logic against fixtures
 
   n8n-testkit <tests.json>             run the tests
-  n8n-testkit --nodes <workflow.json>  list the Code nodes you can test
+  n8n-testkit --nodes <workflow.json>  list the Code nodes, testable or not
 
 Exits with code 1 when any test fails, so it can gate a deploy.
 No n8n instance and no credentials: your integration nodes never run.
@@ -47,6 +47,42 @@ Docs: https://github.com/perly-dev/n8n-testkit
 `);
   process.exit(0);
 }
+
+const vuoleAiuto = argomenti.includes('--help') || argomenti.includes('-h');
+if (!argomenti.length) aiuto();
+
+// Gli argomenti si controllano PRIMA di scegliere il comando: prima
+// «--nodes flusso.json --bogus» e «--version --bogus» uscivano con 0, e chi
+// aveva sbagliato a scrivere pensava che l'opzione avesse fatto qualcosa.
+// L'aiuto si stampa DOPO il controllo: «--help --bogus» usciva con 0, cioè
+// diceva che andava tutto bene a chi aveva appena sbagliato a scrivere.
+const CONOSCIUTE = new Set(['--help', '-h', '--version', '-v', '--nodes', '--nodi']);
+const attese = { '--help': 0, '-h': 0, '--version': 0, '-v': 0, '--nodes': 1, '--nodi': 1 };
+{
+  const comando = CONOSCIUTE.has(argomenti[0]) ? argomenti[0] : null;
+  const resto = comando ? argomenti.slice(1) : argomenti;
+  // «--» separa le opzioni dai percorsi, per il file che comincia per trattino.
+  const separatore = resto.indexOf('--');
+  const prima = separatore === -1 ? resto : resto.slice(0, separatore);
+  const dopo = separatore === -1 ? [] : resto.slice(separatore + 1);
+  const opzioni = prima.filter((a) => a.startsWith('-'));
+  const percorsi = [...prima.filter((a) => !a.startsWith('-')), ...dopo];
+
+  const ignota = opzioni.find((a) => !CONOSCIUTE.has(a));
+  if (ignota) {
+    console.error(c(ROSSO, `Unknown option "${ignota}". Try --help.`));
+    process.exit(2);
+  }
+  const quanti = comando ? attese[comando] : 1;
+  if (percorsi.length > quanti) {
+    console.error(c(ROSSO,
+      `${comando || 'n8n-testkit'} takes ${quanti} file${quanti === 1 ? '' : 's'}, got ${percorsi.length}. Try --help.`));
+    process.exit(2);
+  }
+  argomenti.splice(comando ? 1 : 0, argomenti.length, ...percorsi);
+}
+
+if (vuoleAiuto) aiuto();
 
 if (argomenti[0] === '--version' || argomenti[0] === '-v') {
   const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
@@ -80,22 +116,16 @@ if (argomenti[0] === '--nodes' || argomenti[0] === '--nodi') {
   // Dire «testabile» a un nodo che non si può eseguire manda a scrivere una
   // prova destinata a non girare. Meglio dirlo qui, col motivo.
   if (esclusi.length) {
-    console.log(`\n${provabili.length ? 'Not testable here' : 'No testable Code nodes'}:\n`);
+    if (!provabili.length) console.log(`\nNo Code node in «${wf.name || argomenti[1]}» can be tested.`);
+    console.log('\nNot testable here:\n');
     for (const n of esclusi) console.log(`  ${n.nome} ${c(GRIGIO, `— ${n.perche}`)}`);
   }
   console.log('');
   process.exit(0);
 }
 
-// Anche dopo il nome del file: «tests.json --bogus» usciva con 0, facendo
-// credere che l'opzione avesse avuto un effetto.
-const ignota = argomenti.find((a) => a.startsWith('-'));
-if (ignota) {
-  console.error(c(ROSSO, `Unknown option "${ignota}". Try --help.`));
-  process.exit(2);
-}
-if (argomenti.length > 1) {
-  console.error(c(ROSSO, `One test file at a time, got ${argomenti.length}. Try --help.`));
+if (!argomenti.length) {
+  console.error(c(ROSSO, 'Which test file? Usage: n8n-testkit <tests.json>'));
   process.exit(2);
 }
 

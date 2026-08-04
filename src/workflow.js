@@ -94,8 +94,13 @@ function inPython(n) {
  */
 export function nodiCode(wf) {
   const code = wf.nodes.filter((n) => n && n.type === CODE);
+  // I duplicati si contano su TUTTI i nodi, come fa codiceDelNodo: un Code node
+  // e un nodo HTTP con lo stesso nome venivano elencati come provabili e poi
+  // rifiutati all'esecuzione.
   const conteggio = new Map();
-  for (const n of code) conteggio.set(n.name, (conteggio.get(n.name) || 0) + 1);
+  for (const n of wf.nodes) {
+    if (n && n.name) conteggio.set(n.name, (conteggio.get(n.name) || 0) + 1);
+  }
 
   const provabili = [];
   const esclusi = [];
@@ -104,7 +109,7 @@ export function nodiCode(wf) {
     if (conteggio.get(n.name) > 1) {
       if (!visti.has(n.name)) {
         visti.add(n.name);
-        esclusi.push({ nome: n.name, perche: `${conteggio.get(n.name)} nodes share this name` });
+        esclusi.push({ nome: n.name, perche: `${conteggio.get(n.name)} nodes in this workflow share this name` });
       }
       continue;
     }

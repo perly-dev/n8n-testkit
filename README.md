@@ -176,8 +176,10 @@ Read this before you trust it.
 - **It runs JavaScript Code nodes only.** Python Code nodes are listed as untestable rather
   than run. Both modes work — *run once for all items* and *run once for each item* — and
   the mode is taken from the node itself, not from your test.
-- **`$('Other node').item` is matched by position**, not by n8n's item linking. With equal
-  item counts it is the same thing; with a node that filters or fans out, it is not.
+- **`$('Other node').item` is matched by position**, not by n8n's item linking. In a
+  one-to-one chain that preserves order they agree. Anywhere a node filters, reorders or
+  fans out, real n8n follows `pairedItem` and this does not — supply that node's output
+  under `nodes` and assert on it directly.
 
 ## Use it in CI
 
