@@ -286,11 +286,52 @@ prova('nessun comando ignora un argomento sbagliato', () => {
 
 prova('«--» permette di provare un file il cui nome comincia per trattino', () => {
   const dir = cartellaDiProva();
-  const strano = join(dir, '-tests.json');
-  cpSync(join(dir, 'tests-lead-intake.json'), strano);
-  const { uscita, codice } = cli(['--', strano]);
+  cpSync(join(dir, 'tests-lead-intake.json'), join(dir, '-tests.json'));
+  // Il nome relativo, davvero preceduto da un trattino: passare il percorso
+  // assoluto non provava il caso, perché comincia con «/».
+  const { uscita, codice } = cli(['--', '-tests.json'], { cwd: dir });
   uguale(codice, 0, 'codice di uscita');
   contiene(uscita, '10 of 10 passed', 'riepilogo');
+  // e senza «--» dev'essere rifiutato come opzione, non letto come file
+  const senza = cli(['-tests.json'], { cwd: dir });
+  uguale(senza.codice, 2, 'codice di uscita senza --');
+});
+
+prova('un\'opzione nota di troppo non viene eseguita a metà', () => {
+  for (const argomenti of [['--help', '--version'], ['--nodes', '--version', 'x.json'], ['--version', '-v']]) {
+    const { codice } = cli(argomenti);
+    uguale(codice, 2, `codice di uscita per «${argomenti.join(' ')}»`);
+  }
+});
+
+prova('gli item malformati sono rifiutati come li rifiuta n8n', () => {
+  const casi = [
+    ['return [{json:[]}];', 'an array'],
+    ['return [[{x:1}]];', 'an array'],
+    ['return [{json:{}, binary:7}];', '"binary"'],
+    ['return [{json:{}, extra:1}];', '"extra"'],
+    ['return [{json:new Date()}];', 'a Date'],
+  ];
+  for (const [codiceNodo, atteso] of casi) {
+    const { uscita, codice } = conNodo(codiceNodo, [{ name: codiceNodo, node: 'N', input: [{}], expect: [] }]);
+    uguale(codice, 1, `codice di uscita per «${codiceNodo}»`);
+    contiene(uscita, atteso, `messaggio per «${codiceNodo}»`);
+  }
+});
+
+prova('un oggetto nudo resta legittimo: viene avvolto in { json }', () => {
+  const { codice } = conNodo('return [{a:1}];',
+    [{ name: 'nudo', node: 'N', input: [{}], expect: [{ path: '0.json.a', value: 1 }] }]);
+  uguale(codice, 0, 'codice di uscita');
+});
+
+prova('in per-item i metodi vietati sono rifiutati anche se il codice non li esegue', () => {
+  // n8n guarda il sorgente prima di eseguirlo: dentro un ramo morto passavano.
+  const { uscita, codice } = conNodo('if (false) { $input.all(); }\nreturn {json:{ok:true}};',
+    [{ name: 'ramo morto', node: 'N', input: [{ a: 1 }], expect: [{ path: '0.json.ok', value: true }] }],
+    { mode: 'runOnceForEachItem' });
+  uguale(codice, 1, 'codice di uscita');
+  contiene(uscita, "Can't use $input.all()", 'messaggio');
 });
 
 prova('un nodo impostato su Python non esegue il jsCode rimasto dentro', () => {

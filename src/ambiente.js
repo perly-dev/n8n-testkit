@@ -132,22 +132,51 @@ export async function eseguiNodoCode(codice, ambiente, { singolo = false } = {})
   }
   // n8n accetta sia un array di item sia un singolo item.
   const elenco = Array.isArray(uscita) ? uscita : [uscita];
-  return elenco.map((x, i) => {
-    if (x === null || typeof x !== 'object') {
+  return elenco.map((x, i) => validaItem(x, i));
+}
+
+/** Un oggetto semplice: né array, né Date, né null — la nozione che usa n8n. */
+const oggettoSemplice = (v) => v !== null && typeof v === 'object' && !Array.isArray(v) && !(v instanceof Date);
+
+/** Come si chiama quello che non è un oggetto semplice, per dirlo a chi legge. */
+const descrivi = (v) => {
+  if (v === null) return 'null';
+  if (Array.isArray(v)) return 'an array';
+  if (v instanceof Date) return 'a Date';
+  return `a ${typeof v}`;
+};
+
+// Le chiavi che n8n riconosce a livello di item. Una chiave in più di solito è
+// un «json» dimenticato: { risultato: ... } invece di { json: { risultato: ... } }.
+const CHIAVI = new Set(['json', 'binary', 'pairedItem', 'error', 'index']);
+
+function validaItem(x, i) {
+  if (!oggettoSemplice(x)) {
+    throw new Error(
+      `Item ${i} of what this node returned is ${descrivi(x)}, not an object. ` +
+      `n8n expects items like { json: { ... } }.`
+    );
+  }
+  const item = comeItem(x);
+  if (!oggettoSemplice(item.json)) {
+    throw new Error(`Item ${i} has a "json" that is ${descrivi(item.json)}, not an object. ` +
+                    `n8n expects { json: { ... } }.`);
+  }
+  if ('binary' in item && !oggettoSemplice(item.binary)) {
+    throw new Error(`Item ${i} has a "binary" that is ${descrivi(item.binary)}, not an object.`);
+  }
+  // Solo se l'item è già nella forma n8n: un oggetto nudo viene avvolto da
+  // comeItem e le sue chiavi sono legittimamente dentro "json".
+  if ('json' in x) {
+    const estranee = Object.keys(x).filter((k) => !CHIAVI.has(k));
+    if (estranee.length) {
       throw new Error(
-        `Item ${i} of what this node returned is ${x === null ? 'null' : `a ${typeof x}`}, ` +
-        `not an object. n8n expects items like { json: { ... } }.`
+        `Item ${i} has ${estranee.map((k) => `"${k}"`).join(', ')} next to "json". ` +
+        `n8n only knows ${[...CHIAVI].join(', ')} here — did you mean to put it inside "json"?`
       );
     }
-    const item = comeItem(x);
-    if (item.json === null || typeof item.json !== 'object') {
-      throw new Error(
-        `Item ${i} has a "json" that is ${item.json === null ? 'null' : `a ${typeof item.json}`}, ` +
-        `not an object. n8n expects { json: { ... } }.`
-      );
-    }
-    return item;
-  });
+  }
+  return item;
 }
 
 /**
@@ -155,8 +184,28 @@ export async function eseguiNodoCode(codice, ambiente, { singolo = false } = {})
  * elemento, con $json che punta all'elemento corrente, e si aspetta un item
  * solo per volta. Senza questo, quei nodi fallivano con «$json is not defined».
  */
+/**
+ * n8n controlla il SORGENTE prima di eseguirlo: in modalità per-item questi
+ * metodi sono vietati anche se il codice non ci passa mai. Fermarli solo a
+ * runtime lasciava verde un nodo che n8n si rifiuta di far partire.
+ */
+export function vietatiPerItem(codice) {
+  for (const metodo of ['all', 'first', 'last', 'itemMatching']) {
+    if (new RegExp(`\\$input\\s*\\.\\s*${metodo}\\s*\\(`).test(codice)) return metodo;
+  }
+  return null;
+}
+
 export async function eseguiNodoPerItem(codice, opzioni = {}) {
   if (!Array.isArray(opzioni.input)) throw new Error('"input" must be an array of items');
+  const vietato = vietatiPerItem(codice);
+  if (vietato) {
+    throw new Error(
+      `Can't use $input.${vietato}() here: this node runs once for each item, ` +
+      `so it only ever sees one. Use $json, or switch the node to ` +
+      `"Run Once for All Items". n8n refuses this too, before it even runs.`
+    );
+  }
   const elementi = opzioni.input.map(comeItem);
   const uscita = [];
   for (let i = 0; i < elementi.length; i++) {

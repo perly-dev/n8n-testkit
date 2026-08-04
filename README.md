@@ -167,9 +167,10 @@ Read this before you trust it.
 - **Tests live beside the workflow, not inside it.** Renaming a node you test fails the test
   loudly, but a field you never assert on can change under you and stay green. Same
   discipline as any test suite.
-- **It is not a sandbox.** Your workflow's code runs in this process, with whatever it can
-  reach: the network, the environment, the filesystem. It is your workflow — this reproduces
-  its behaviour, it does not defend against it. See *Use it in CI* below.
+- **It is not a sandbox, and it is not n8n's runtime.** Your workflow's code runs in this
+  process, with whatever Node can reach: the network, the environment, the filesystem. n8n's
+  Code node is more restricted than that, so code can pass here and still be refused there.
+  What this checks is your logic, not that the runtime will allow it. See *Use it in CI*.
 - **`$now` and `$today` are small stand-ins**, not Luxon: `toISO()`, `toMillis()`,
   `toString()`. `$today` is midnight UTC of the same day. Code doing Luxon arithmetic
   (`plus`, `diff`, `startOf`) will need a real fixture instead.
@@ -178,8 +179,9 @@ Read this before you trust it.
   the mode is taken from the node itself, not from your test.
 - **`$('Other node').item` is matched by position**, not by n8n's item linking. In a
   one-to-one chain that preserves order they agree. Anywhere a node filters, reorders or
-  fans out, real n8n follows `pairedItem` and this does not — supply that node's output
-  under `nodes` and assert on it directly.
+  fans out, n8n follows `pairedItem` and this does not reproduce it: a node relying on
+  `.item` there cannot be tested faithfully here. Use `$('Other node').all()` with explicit
+  indices, or assert on the node that does the pairing instead.
 
 ## Use it in CI
 

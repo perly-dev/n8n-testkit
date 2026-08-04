@@ -73,6 +73,12 @@ const attese = { '--help': 0, '-h': 0, '--version': 0, '-v': 0, '--nodes': 1, '-
     console.error(c(ROSSO, `Unknown option "${ignota}". Try --help.`));
     process.exit(2);
   }
+  // Anche un'opzione NOTA di troppo: «--nodes --version flusso.json» usciva 0,
+  // eseguendone una sola e tacendo sull'altra.
+  if (opzioni.length) {
+    console.error(c(ROSSO, `"${comando || argomenti[0]}" does not take ${opzioni.map((o) => `"${o}"`).join(', ')}. Try --help.`));
+    process.exit(2);
+  }
   const quanti = comando ? attese[comando] : 1;
   if (percorsi.length > quanti) {
     console.error(c(ROSSO,
