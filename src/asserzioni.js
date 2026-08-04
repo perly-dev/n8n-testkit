@@ -14,9 +14,16 @@ import { isDeepStrictEqual } from 'node:util';
  * il modo peggiore di raccontare un guasto a chi sta cercando di capirlo.
  */
 export function motivo(e) {
-  if (e instanceof Error) return e.message;
+  if (e instanceof Error) return e.message || String(e);
   if (typeof e === 'string') return e;
-  try { return JSON.stringify(e); } catch { return String(e); }
+  // Deve SEMPRE restituire una stringa: chi la riceve ci chiama .includes(),
+  // e un undefined qui faceva morire l'intera suite con un TypeError.
+  try {
+    const s = JSON.stringify(e);
+    return s === undefined ? String(e) : s;
+  } catch {
+    return String(e);
+  }
 }
 
 /** Legge «0.json.category» dentro il risultato, senza esplodere sui pezzi mancanti. */

@@ -203,6 +203,73 @@ prova('la modalità «once for each item» esegue il codice su ogni elemento', (
   uguale(codice, 0, 'codice di uscita');
 });
 
+prova('in modalità per-item, «$input.all()» è rifiutato come lo rifiuta n8n', () => {
+  // Accettarlo dava verde a codice che n8n si rifiuta di eseguire: un test kit
+  // che assolve un guasto è peggio di nessun test kit.
+  const { uscita, codice } = conNodo('return {json:{n:$input.all().length}};',
+    [{ name: 'all vietato', node: 'N', input: [{ a: 1 }, { a: 2 }], expect: [{ path: '0.json.n', value: 1 }] }],
+    { mode: 'runOnceForEachItem' });
+  uguale(codice, 1, 'codice di uscita');
+  contiene(uscita, "Can't use $input.all() here", 'messaggio');
+});
+
+prova('in modalità per-item, restituire un array è rifiutato', () => {
+  const { uscita, codice } = conNodo('return [{json:{a:1}},{json:{b:2}}];',
+    [{ name: 'array vietato', node: 'N', input: [{ x: 1 }, { x: 2 }], expect: [{ path: '3.json.b', value: 2 }] }],
+    { mode: 'runOnceForEachItem' });
+  uguale(codice, 1, 'codice di uscita');
+  contiene(uscita, 'must return a single item', 'messaggio');
+});
+
+prova('un nodo impostato su Python non esegue il jsCode rimasto dentro', () => {
+  const { uscita, codice } = conNodo("return [{json:{lingua:'javascript'}}];",
+    [{ name: 'python', node: 'N', input: [{}], expect: [{ path: '0.json.lingua', value: 'javascript' }] }],
+    { language: 'pythonNative', pythonCode: 'return items' });
+  uguale(codice, 1, 'codice di uscita');
+  contiene(uscita, 'is set to Python', 'messaggio');
+});
+
+prova('«throw undefined» non porta giù la suite', () => {
+  const { uscita, codice } = conNodo('throw undefined;',
+    [{ name: 'undefined', node: 'N', input: [{}], throws: 'qualcosa' },
+     { name: 'la seguente gira lo stesso', node: 'N', input: [{}], throws: 'qualcosa' }]);
+  uguale(codice, 1, 'codice di uscita');
+  contiene(uscita, '2 of 2 failed', 'entrambe le prove devono essere state eseguite');
+});
+
+prova('«$(\'Nodo\').item» segue la posizione dell\'elemento in lavorazione', () => {
+  const { codice } = conNodo('return {json:{v:$("Prima").item.json.v}};',
+    [{ name: 'abbinamento', node: 'N', input: [{ a: 1 }, { a: 2 }],
+       nodes: { Prima: [{ v: 'uno' }, { v: 'due' }] },
+       expect: [{ path: '0.json.v', value: 'uno' }, { path: '1.json.v', value: 'due' }] }],
+    { mode: 'runOnceForEachItem' });
+  uguale(codice, 0, 'codice di uscita');
+});
+
+prova('«--nodes» non presenta come provabile un nodo che non si può eseguire', () => {
+  const dir = cartellaDiProva();
+  writeFileSync(join(dir, 'wf.json'), JSON.stringify({
+    name: 'misto',
+    nodes: [
+      { name: 'Buono', type: 'n8n-nodes-base.code', parameters: { jsCode: 'return [];' } },
+      { name: 'Py', type: 'n8n-nodes-base.code', parameters: { language: 'pythonNative', pythonCode: 'x' } },
+      { name: 'Vuoto', type: 'n8n-nodes-base.code', parameters: {} },
+    ],
+  }));
+  const { uscita } = cli(['--nodes', join(dir, 'wf.json')]);
+  const provabili = uscita.split('Not testable here')[0];
+  contiene(provabili, 'Buono', 'il nodo buono');
+  for (const n of ['Py', 'Vuoto']) {
+    if (provabili.includes(n)) throw new Error(`«${n}» presentato come provabile`);
+  }
+  contiene(uscita, 'written in Python', 'il motivo dell\'esclusione');
+});
+
+prova('un\'opzione sconosciuta dopo il nome del file non viene ignorata', () => {
+  const { codice } = cli([join(RADICE, 'esempi', 'tests-lead-intake.json'), '--bogus']);
+  uguale(codice, 2, 'codice di uscita');
+});
+
 prova('«$today» è la mezzanotte del giorno, non l\'istante di «$now»', () => {
   const { codice } = conNodo('return [{json:{t:$today.toISO()}}];',
     [{ name: 'today', node: 'N', input: [{}], now: '2020-06-15T12:30:00.000Z',
@@ -251,6 +318,7 @@ prova('ogni operatore del codice è documentato nel README', () => {
 
 prova('l\'elenco di nodi mostrato nel README è quello che il programma stampa', () => {
   const { uscita } = cli(['--nodes', join(RADICE, 'esempi', 'lead-intake.json')]);
+  if (uscita.includes('Not testable here')) throw new Error('l\'esempio ha nodi non provabili: aggiornare README e prova');
   const veri = uscita.split('\n').map((r) => r.trim()).filter((r) => r && !r.includes('Code nodes in'));
   const blocco = README.split('```\nCode nodes in')[1];
   if (!blocco) throw new Error('il README non mostra più il blocco --nodes: aggiornare questa prova');
@@ -280,6 +348,19 @@ prova('il riquadro di output in cima al README è, riga per riga, quello che il 
 prova('il nome del workflow citato nel README è quello vero', () => {
   const wf = JSON.parse(readFileSync(join(RADICE, 'esempi', 'lead-intake.json'), 'utf8'));
   contiene(README, wf.name, 'nome del workflow di esempio');
+});
+
+prova('l\'help non promette cose che il README smentisce', () => {
+  // Il banco non leggeva affatto l'help, ed era rimasta lì la promessa
+  // «no side effects» mentre il README spiegava il contrario.
+  const { uscita, codice } = cli(['--help']);
+  uguale(codice, 0, 'codice di uscita');
+  for (const promessa of ['no side effects', 'not a single real email', 'sandbox']) {
+    if (uscita.toLowerCase().includes(promessa)) {
+      throw new Error(`l'help promette «${promessa}», che non è vero: i Code node girano in questo processo`);
+    }
+  }
+  contiene(uscita, 'n8n-testkit', 'intestazione');
 });
 
 prova('le frasi che il README cita fra virgolette esistono nel codice', () => {
@@ -320,7 +401,10 @@ prova('$now espone esattamente i metodi che il README dichiara', () => {
 // Questa prova installa il pacchetto e ne lancia il banco. Quel banco contiene
 // questa stessa prova: senza la sentinella si impacchetterebbe all'infinito.
 // Nel giro annidato viene dichiarata saltata, non silenziosamente omessa.
-if (process.env.N8N_TESTKIT_BANCO_ANNIDATO) {
+// La sentinella viaggia negli argomenti, non nell'ambiente: una variabile
+// d'ambiente si eredita per sbaglio e avrebbe fatto saltare la prova in
+// silenzio, lasciando scritto «tutte le prove passate».
+if (process.argv.includes('--annidato')) {
   console.log('  — il pacchetto vero, impacchettato e installato (già provato dal giro esterno)');
 } else prova('il pacchetto vero, impacchettato e installato, funziona una volta installato', () => {
   // Fin qui si è provato il bin del repository. Quello che finisce agli utenti è
@@ -343,9 +427,8 @@ if (process.env.N8N_TESTKIT_BANCO_ANNIDATO) {
   uguale(eseguito.status, 0, 'codice di uscita del pacchetto installato');
   contiene(eseguito.stdout, '10 of 10 passed', 'riepilogo');
   // e il suo «npm test» deve girare: se «files» dimentica test/ o esempi/, no.
-  const suo = spawnSync('npm', ['test'], {
+  const suo = spawnSync(process.execPath, ['test/esegui-test.js', '--annidato'], {
     cwd: join(progetto, 'node_modules', 'n8n-testkit'), encoding: 'utf8',
-    env: { ...process.env, N8N_TESTKIT_BANCO_ANNIDATO: '1' },
   });
   uguale(suo.status, 0, `npm test dentro il pacchetto installato: ${(suo.stdout || '').slice(-300)}`);
 });

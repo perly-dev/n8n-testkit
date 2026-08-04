@@ -66,9 +66,12 @@ export function codiceDelNodo(wf, nome) {
     );
   }
   const parametri = n.parameters || {};
-  if (parametri.pythonCode && !parametri.jsCode) {
+  // La lingua la decide «language», come fa n8n: un nodo passato a Python può
+  // conservare il vecchio jsCode, e fidarsi di quello significherebbe eseguire
+  // codice che in produzione non gira più.
+  if (inPython(n)) {
     throw new Error(
-      `Code node "${nome}" is written in Python, which this tool does not run. ` +
+      `Code node "${nome}" is set to Python, which this tool does not run. ` +
       `It reproduces the JavaScript Code node only.`
     );
   }
@@ -77,7 +80,37 @@ export function codiceDelNodo(wf, nome) {
   return { codice, perItem: parametri.mode === 'runOnceForEachItem' };
 }
 
-/** Tutti i nodi Code: serve a suggerire cosa si può provare. */
+/** Un nodo Code impostato su Python: c'è, ma questo strumento non lo esegue. */
+function inPython(n) {
+  const lingua = (n.parameters || {}).language;
+  return typeof lingua === 'string' && lingua.toLowerCase().includes('python');
+}
+
+/**
+ * I nodi Code che si possono davvero provare, e quelli che no col loro motivo.
+ *
+ * Elencare fra i «testabili» un nodo Python, uno vuoto o un nome duplicato
+ * manda l'utente a scrivere una prova che non potrà mai girare.
+ */
 export function nodiCode(wf) {
-  return wf.nodes.filter((n) => n && n.type === CODE).map((n) => n.name);
+  const code = wf.nodes.filter((n) => n && n.type === CODE);
+  const conteggio = new Map();
+  for (const n of code) conteggio.set(n.name, (conteggio.get(n.name) || 0) + 1);
+
+  const provabili = [];
+  const esclusi = [];
+  const visti = new Set();
+  for (const n of code) {
+    if (conteggio.get(n.name) > 1) {
+      if (!visti.has(n.name)) {
+        visti.add(n.name);
+        esclusi.push({ nome: n.name, perche: `${conteggio.get(n.name)} nodes share this name` });
+      }
+      continue;
+    }
+    if (inPython(n)) esclusi.push({ nome: n.name, perche: 'written in Python' });
+    else if (!(n.parameters || {}).jsCode) esclusi.push({ nome: n.name, perche: 'empty' });
+    else provabili.push(n.name);
+  }
+  return { provabili, esclusi };
 }

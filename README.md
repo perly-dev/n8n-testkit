@@ -173,8 +173,11 @@ Read this before you trust it.
 - **`$now` and `$today` are small stand-ins**, not Luxon: `toISO()`, `toMillis()`,
   `toString()`. `$today` is midnight UTC of the same day. Code doing Luxon arithmetic
   (`plus`, `diff`, `startOf`) will need a real fixture instead.
-- **It runs JavaScript Code nodes, in "run once for all items" style.** Python Code nodes
-  and per-item mode are not reproduced.
+- **It runs JavaScript Code nodes only.** Python Code nodes are listed as untestable rather
+  than run. Both modes work — *run once for all items* and *run once for each item* — and
+  the mode is taken from the node itself, not from your test.
+- **`$('Other node').item` is matched by position**, not by n8n's item linking. With equal
+  item counts it is the same thing; with a node that filters or fans out, it is not.
 
 ## Use it in CI
 

@@ -40,7 +40,8 @@ ${c(GRASSETTO, 'n8n-testkit')} — run your n8n workflow logic against fixtures
   n8n-testkit --nodes <workflow.json>  list the Code nodes you can test
 
 Exits with code 1 when any test fails, so it can gate a deploy.
-No n8n instance, no credentials, no side effects.
+No n8n instance and no credentials: your integration nodes never run.
+Your Code nodes do run, in this process — see "Use it in CI" in the README.
 
 Docs: https://github.com/perly-dev/n8n-testkit
 `);
@@ -67,19 +68,34 @@ if (argomenti[0] === '--nodes' || argomenti[0] === '--nodi') {
     console.error(c(ROSSO, e.message));
     process.exit(2);
   }
-  const nodi = nodiCode(wf);
-  if (!nodi.length) {
+  const { provabili, esclusi } = nodiCode(wf);
+  if (!provabili.length && !esclusi.length) {
     console.log('This workflow has no Code nodes: there is no logic of yours to test.');
     process.exit(0);
   }
-  console.log(`\nCode nodes in «${wf.name || argomenti[1]}»:\n`);
-  for (const n of nodi) console.log(`  ${n}`);
+  if (provabili.length) {
+    console.log(`\nCode nodes in «${wf.name || argomenti[1]}»:\n`);
+    for (const n of provabili) console.log(`  ${n}`);
+  }
+  // Dire «testabile» a un nodo che non si può eseguire manda a scrivere una
+  // prova destinata a non girare. Meglio dirlo qui, col motivo.
+  if (esclusi.length) {
+    console.log(`\n${provabili.length ? 'Not testable here' : 'No testable Code nodes'}:\n`);
+    for (const n of esclusi) console.log(`  ${n.nome} ${c(GRIGIO, `— ${n.perche}`)}`);
+  }
   console.log('');
   process.exit(0);
 }
 
-if (argomenti[0].startsWith('-')) {
-  console.error(c(ROSSO, `Unknown option "${argomenti[0]}". Try --help.`));
+// Anche dopo il nome del file: «tests.json --bogus» usciva con 0, facendo
+// credere che l'opzione avesse avuto un effetto.
+const ignota = argomenti.find((a) => a.startsWith('-'));
+if (ignota) {
+  console.error(c(ROSSO, `Unknown option "${ignota}". Try --help.`));
+  process.exit(2);
+}
+if (argomenti.length > 1) {
+  console.error(c(ROSSO, `One test file at a time, got ${argomenti.length}. Try --help.`));
   process.exit(2);
 }
 

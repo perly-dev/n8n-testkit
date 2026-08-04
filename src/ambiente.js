@@ -24,7 +24,7 @@ export function comeItem(x) {
  * @param {Date}   opzioni.adesso     istante fisso: un test che dipende dall'orologio
  *                                    fallisce a mezzanotte e nessuno capisce perché
  */
-export function creaAmbiente({ input = [], nodi = {}, env = {}, vars = {}, adesso } = {}) {
+export function creaAmbiente({ input = [], nodi = {}, env = {}, vars = {}, adesso, indice = 0 } = {}) {
   if (!Array.isArray(input)) throw new Error('"input" must be an array of items');
   const elementi = input.map(comeItem);
   const istante = adesso ? new Date(adesso) : null;
@@ -51,7 +51,10 @@ export function creaAmbiente({ input = [], nodi = {}, env = {}, vars = {}, adess
       all: () => dati,
       first: () => dati[0],
       last: () => dati[dati.length - 1],
-      item: dati[0],
+      // In n8n «.item» è l'elemento abbinato a quello che si sta elaborando, non
+      // sempre il primo. Qui si usa la posizione: è l'abbinamento vero nel caso
+      // normale (stesso numero di elementi), e il limite è scritto nel README.
+      item: dati[indice] ?? dati[0],
       itemMatching: (i) => dati[i],
     };
   };
@@ -99,7 +102,7 @@ export function creaAmbiente({ input = [], nodi = {}, env = {}, vars = {}, adess
 // messaggio che fa sembrare rotto lo strumento invece del workflow.
 const FunzioneAsync = Object.getPrototypeOf(async function () {}).constructor;
 
-export async function eseguiNodoCode(codice, ambiente) {
+export async function eseguiNodoCode(codice, ambiente, { singolo = false } = {}) {
   const nomi = Object.keys(ambiente);
   const valori = nomi.map((n) => ambiente[n]);
   let fn;
@@ -109,8 +112,16 @@ export async function eseguiNodoCode(codice, ambiente) {
     throw new Error(`The node's code does not compile: ${e.message}`);
   }
   const uscita = await fn(...valori);
-  // n8n accetta sia un array di item sia un singolo item.
   if (uscita === undefined || uscita === null) return [];
+  // In modalità per-item n8n pretende UN elemento per esecuzione. Appiattendo un
+  // array, due elementi in ingresso ne producevano quattro in uscita, tutti verdi.
+  if (singolo && Array.isArray(uscita)) {
+    throw new Error(
+      `This node runs once for each item, so it must return a single item ` +
+      `(an object), not an array of ${uscita.length}. n8n rejects this too.`
+    );
+  }
+  // n8n accetta sia un array di item sia un singolo item.
   return (Array.isArray(uscita) ? uscita : [uscita]).map(comeItem);
 }
 
@@ -120,13 +131,31 @@ export async function eseguiNodoCode(codice, ambiente) {
  * solo per volta. Senza questo, quei nodi fallivano con «$json is not defined».
  */
 export async function eseguiNodoPerItem(codice, opzioni = {}) {
-  const elementi = (opzioni.input || []).map(comeItem);
+  if (!Array.isArray(opzioni.input)) throw new Error('"input" must be an array of items');
+  const elementi = opzioni.input.map(comeItem);
   const uscita = [];
   for (let i = 0; i < elementi.length; i++) {
-    const ambiente = creaAmbiente({ ...opzioni, input: [elementi[i]] });
+    const ambiente = creaAmbiente({ ...opzioni, input: [elementi[i]], indice: i });
     ambiente.$json = elementi[i].json;
     ambiente.$itemIndex = i;
-    const risultato = await eseguiNodoCode(codice, ambiente);
+    // n8n vieta questi metodi in modalità per-item. Accettarli renderebbe verde
+    // del codice che n8n rifiuta di eseguire: un test kit che assolve un guasto
+    // è peggio di nessun test kit.
+    const vietato = (metodo) => () => {
+      throw new Error(
+        `Can't use $input.${metodo}() here: this node runs once for each item, ` +
+        `so it only ever sees one. Use $json, or switch the node to ` +
+        `"Run Once for All Items". n8n refuses this too.`
+      );
+    };
+    ambiente.$input = {
+      item: elementi[i],
+      all: vietato('all'),
+      first: vietato('first'),
+      last: vietato('last'),
+      itemMatching: vietato('itemMatching'),
+    };
+    const risultato = await eseguiNodoCode(codice, ambiente, { singolo: true });
     uscita.push(...risultato);
   }
   return uscita;
