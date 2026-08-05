@@ -29,10 +29,24 @@ export function creaAmbiente({ input = [], nodi = {}, env = {}, vars = {}, adess
   const elementi = input.map(comeItem);
   const istante = adesso ? new Date(adesso) : null;
 
+  // In n8n questi metodi accettano (branchIndex, runIndex): servono a leggere un
+  // ramo o un'esecuzione diversi. Qui c'è un solo insieme di dati, quindi
+  // ignorarli in silenzio darebbe verde a una prova che chiede altro.
+  const senzaRami = (nome, fn) => (...argomenti) => {
+    if (argomenti.length) {
+      throw new Error(
+        `$input.${nome}() was called with arguments (branch/run index), which this does ` +
+        `not reproduce: a test supplies one set of items. Assert on the node that feeds ` +
+        `the branch instead.`
+      );
+    }
+    return fn();
+  };
+
   const $input = {
-    all: () => elementi,
-    first: () => elementi[0],
-    last: () => elementi[elementi.length - 1],
+    all: senzaRami('all', () => elementi),
+    first: senzaRami('first', () => elementi[0]),
+    last: senzaRami('last', () => elementi[elementi.length - 1]),
     item: elementi[0],
   };
 
@@ -47,10 +61,19 @@ export function creaAmbiente({ input = [], nodi = {}, env = {}, vars = {}, adess
       );
     }
     const dati = (nodi[nome] || []).map(comeItem);
+    const senzaEsecuzioni = (metodo, fn) => (...argomenti) => {
+      if (argomenti.length) {
+        throw new Error(
+          `$('${nome}').${metodo}() was called with arguments (branch/run index), which ` +
+          `this does not reproduce: the fixture under "nodes" is a single set of items.`
+        );
+      }
+      return fn();
+    };
     return {
-      all: () => dati,
-      first: () => dati[0],
-      last: () => dati[dati.length - 1],
+      all: senzaEsecuzioni('all', () => dati),
+      first: senzaEsecuzioni('first', () => dati[0]),
+      last: senzaEsecuzioni('last', () => dati[dati.length - 1]),
       // In n8n «.item» è l'elemento abbinato a quello che si sta elaborando, non
       // sempre il primo. Qui si usa la posizione: è l'abbinamento vero nel caso
       // normale (stesso numero di elementi), e il limite è scritto nel README.

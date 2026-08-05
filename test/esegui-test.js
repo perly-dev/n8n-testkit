@@ -182,7 +182,7 @@ prova('due nodi con lo stesso nome vengono rifiutati invece di sceglierne uno', 
 prova('una prova scritta male non porta giù le altre', () => {
   const { uscita, codice } = conNodo('return [{json:{ok:1}}];', [
     { name: 'buona', node: 'N', input: [{}], expect: [{ path: '0.json.ok', value: 1 }] },
-    { name: 'malformata', node: 'N', input: {} },
+    { name: 'malformata', node: 'N', input: {}, expect: [{ path: '0.json.ok', value: 1 }] },
   ]);
   uguale(codice, 1, 'codice di uscita');
   contiene(uscita, '✓ buona', 'la prova buona deve essere stata eseguita lo stesso');
@@ -221,10 +221,29 @@ prova('in modalità per-item, restituire un array è rifiutato', () => {
   contiene(uscita, 'must return a single item', 'messaggio');
 });
 
+prova('un file di prove vuoto non è un successo', () => {
+  // «0 of 0 passed» con codice 0 è il modo più facile di avere una pipeline
+  // verde senza aver controllato niente.
+  const dir = cartellaDiProva();
+  writeFileSync(join(dir, 't.json'), JSON.stringify({ workflow: 'lead-intake.json', tests: [] }));
+  const { uscita, codice } = cli([join(dir, 't.json')]);
+  uguale(codice, 2, 'codice di uscita');
+  contiene(uscita, 'no tests', 'messaggio');
+});
+
+prova('una prova che non asserisce niente viene rifiutata', () => {
+  // Non può fallire, quindi non prova niente: è il guasto silenzioso che
+  // questo strumento esiste per smascherare, dentro lo strumento.
+  const { uscita, codice } = conNodo('return [{json:{ok:1}}];',
+    [{ name: 'muta', node: 'N', input: [{}] }]);
+  uguale(codice, 1, 'codice di uscita');
+  contiene(uscita, 'asserts nothing', 'messaggio');
+});
+
 prova('tutti e quattro i metodi vietati di $input lanciano in per-item', () => {
   for (const metodo of ['all()', 'first()', 'last()', 'itemMatching(0)']) {
     const { uscita, codice } = conNodo(`return {json:{v:$input.${metodo}}};`,
-      [{ name: metodo, node: 'N', input: [{ a: 1 }], expect: [] }], { mode: 'runOnceForEachItem' });
+      [{ name: metodo, node: 'N', input: [{ a: 1 }], expect: [{ path: '0.json.v', value: 1 }] }], { mode: 'runOnceForEachItem' });
     uguale(codice, 1, `codice di uscita per $input.${metodo}`);
     contiene(uscita, "Can't use $input.", `messaggio per $input.${metodo}`);
   }
@@ -239,14 +258,14 @@ prova('un nodo che non restituisce item viene rifiutato, come lo rifiuta n8n', (
     ['return ["testo"];', 'not an object'],
   ];
   for (const [codiceNodo, atteso] of casi) {
-    const { uscita, codice } = conNodo(codiceNodo, [{ name: codiceNodo, node: 'N', input: [{}], expect: [] }]);
+    const { uscita, codice } = conNodo(codiceNodo, [{ name: codiceNodo, node: 'N', input: [{}], expect: [{ path: '0.json.mai', value: 'non ci arriva' }] }]);
     uguale(codice, 1, `codice di uscita per «${codiceNodo}»`);
     contiene(uscita, atteso, `messaggio per «${codiceNodo}»`);
   }
 });
 
 prova('«return []» resta legittimo: un filtro può non lasciar passare niente', () => {
-  const { codice } = conNodo('return [];', [{ name: 'niente', node: 'N', input: [{}], expect: [] }]);
+  const { codice } = conNodo('return [];', [{ name: 'niente', node: 'N', input: [{}], expect: [{ path: 'length', value: 0 }] }]);
   uguale(codice, 0, 'codice di uscita');
 });
 
@@ -337,7 +356,7 @@ prova('gli item malformati sono rifiutati come li rifiuta n8n', () => {
     ['return [{json:new Date()}];', 'a Date'],
   ];
   for (const [codiceNodo, atteso] of casi) {
-    const { uscita, codice } = conNodo(codiceNodo, [{ name: codiceNodo, node: 'N', input: [{}], expect: [] }]);
+    const { uscita, codice } = conNodo(codiceNodo, [{ name: codiceNodo, node: 'N', input: [{}], expect: [{ path: '0.json.mai', value: 'non ci arriva' }] }]);
     uguale(codice, 1, `codice di uscita per «${codiceNodo}»`);
     contiene(uscita, atteso, `messaggio per «${codiceNodo}»`);
   }
@@ -439,8 +458,15 @@ prova('ogni operatore documentato nel README esiste nel codice', () => {
   // Solo la prima colonna delle righe di tabella: fuori dalla tabella il README
   // usa `value` e `why`, che sono campi, non operatori.
   const tabella = README.split('| `operator` | Passes when |')[1] || '';
-  const documentati = tabella.split('\n')
-    .filter((r) => r.startsWith('|') && !/^\|\s*-+/.test(r))
+  // Solo le righe CONSECUTIVE della tabella: più avanti il README ne ha altre,
+  // e continuare a leggere ne raccoglieva le celle come se fossero operatori.
+  const righe = [];
+  for (const r of tabella.split('\n').slice(1)) {
+    if (!r.startsWith('|')) break;
+    righe.push(r);
+  }
+  const documentati = righe
+    .filter((r) => !/^\|\s*-+/.test(r))
     .map((r) => (r.split('|')[1] || '').match(/`([a-zA-Z]+)`/))
     .filter(Boolean).map((m) => m[1]);
   if (!documentati.length) throw new Error('nessun operatore letto dal README: il parser non sta provando niente');

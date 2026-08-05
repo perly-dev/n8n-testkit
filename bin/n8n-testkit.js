@@ -188,6 +188,12 @@ for (const p of esito.esiti) {
 
 const totale = esito.esiti.length;
 console.log('');
+// «0 of 0 passed» con codice 0 è il modo più facile di avere una pipeline verde
+// senza aver provato niente: un file di prove vuoto è quasi sempre uno sbaglio.
+if (!totale) {
+  console.log(c(ROSSO, '  This file contains no tests, so nothing was checked.') + '\n');
+  process.exit(2);
+}
 if (esito.failed) {
   console.log(c(ROSSO, `  ${esito.failed} of ${totale} failed`) + '\n');
   process.exit(1);

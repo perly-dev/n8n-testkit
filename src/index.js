@@ -25,6 +25,16 @@ export async function eseguiProva(wf, prova) {
     return esito;
   };
 
+  // Una prova che non verifica niente passa sempre, e una suite fatta di prove
+  // così è verde per costruzione: è il guasto silenzioso che questo strumento
+  // esiste per smascherare, dentro lo strumento.
+  if (!prova.throws && !(prova.expect || []).length) {
+    return chiudi(
+      `this test asserts nothing, so it can never fail. ` +
+      `Add "expect" with at least one assertion, or "throws" if the node is supposed to throw.`
+    );
+  }
+
   // Una prova scritta male deve far fallire QUELLA prova, non buttare giù
   // l'intera suite lasciando le altre non eseguite.
   if (prova.input !== undefined && !Array.isArray(prova.input)) {

@@ -1,6 +1,6 @@
 {
   "name": "n8n-testkit",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Run the JavaScript in your n8n Code nodes against fixtures and fail the build when it regresses. No n8n instance, no credentials.",
   "keywords": ["n8n", "testing", "regression", "workflow", "ci", "automation", "assertions"],
   "license": "MIT",

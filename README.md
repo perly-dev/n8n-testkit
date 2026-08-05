@@ -33,16 +33,15 @@ numbers.
 
 ## Why this exists
 
-An n8n workflow breaks quietly. A model changes its answer shape, an API adds a field, a
-node gets a new version — and the execution stays **green** while the data going into your
-CRM turns to mush. You find out weeks later, from a customer.
+An n8n workflow breaks quietly. Someone edits a Code node, or the payload arriving at it
+changes shape — and the execution stays **green** while the data landing in your CRM is
+wrong. You find out weeks later, from a customer.
 
-n8n's built-in evaluations compare a whole run against a dataset. Useful, but they need the
-workflow to actually run, which means credentials and careful isolation of every
-integration it touches. That is a lot to set up in a pipeline that runs on every change.
+n8n's evaluations exercise a path through a running workflow. This is a smaller check for
+the deterministic part: the JavaScript you wrote.
 
-This runs the **Code nodes** — the logic you wrote — on fixtures you control, asserts on
-the shape of what comes out, and exits non-zero when it drifts.
+Each test picks one Code node, runs it on fixtures you control, checks assertions on
+selected paths of what comes out, and exits non-zero when a value drifts.
 
 ## Install
 
@@ -55,8 +54,9 @@ Node 18 or newer. No dependencies.
 
 ## Start here
 
-Export your workflow from n8n (**Download**, not copy-paste), then ask which nodes are
-testable:
+Export your workflow from n8n (**Download**, not copy-paste), then list its JavaScript
+Code nodes, along with the ones that are obviously out of reach — Python, empty, or a name
+shared with another node:
 
 ```bash
 npx n8n-testkit --nodes my-workflow.json
@@ -127,6 +127,8 @@ longer protects anything."*
 ### Assertions
 
 `path` is a path into the result: `0.json.category` means "first item, field `category`".
+Dots separate the steps, so a field whose **name** contains a dot cannot be addressed —
+assert on its parent object instead.
 
 | `operator` | Passes when |
 |---|---|
@@ -155,6 +157,30 @@ If everything still passes, your assertions are decorative.
 string without throwing: the run stayed green, and the failure went unread. That is the
 exact silent breakage this tool exists to catch, living inside the tool.)*
 
+## What is reproduced, exactly
+
+This is a compatibility shim, not n8n's task runner. **A green run means the assertions
+passed here — not that n8n will accept the code.** The table is the honest boundary:
+
+| Inside a Code node | Here |
+|---|---|
+| `$input.all()` / `.first()` / `.last()` / `.item` | yes — but a branch or run index argument is refused, not ignored |
+| `$json`, `$itemIndex` (per-item mode) | yes |
+| `$('Node').all()` / `.first()` / `.last()` / `.itemMatching(i)` | yes, from the fixtures you pass under `nodes` |
+| `$('Node').item` | by **position**, not by `pairedItem` |
+| `$env`, `$vars`, `$runIndex`, `$execution`, `$workflow` | yes, from the test |
+| `$now`, `$today` | `toISO()`, `toMillis()`, `toString()` only — not Luxon |
+| `await` / async code | yes |
+| Run once for all items / for each item | yes, taken from the node |
+| `$helpers`, `this.helpers`, module imports | **no** |
+| Python Code nodes | **no** — listed as untestable |
+| n8n's own sandbox restrictions | **no** — see below |
+
+Verified against the documented behaviour of the JavaScript Code node and against the
+workflow exports in `esempi/`. It is **not** verified against a running n8n instance, so
+treat runtime compatibility as untested: if something passes here and n8n refuses it, that
+is a bug worth [reporting](https://github.com/perly-dev/n8n-testkit/issues).
+
 ## What it does **not** do
 
 Read this before you trust it.
@@ -172,22 +198,27 @@ Read this before you trust it.
   Code node is more restricted than that, so code can pass here and still be refused there.
   What this checks is your logic, not that the runtime will allow it. See *Use it in CI*.
 - **`$now` and `$today` are small stand-ins**, not Luxon: `toISO()`, `toMillis()`,
-  `toString()`. `$today` is midnight UTC of the same day. Code doing Luxon arithmetic
-  (`plus`, `diff`, `startOf`) will need a real fixture instead.
+  `toString()`. `$today` is midnight UTC of the same day. **Luxon arithmetic (`plus`,
+  `diff`, `startOf`) is not supported** — a node that uses it cannot be tested here.
 - **It runs JavaScript Code nodes only.** Python Code nodes are listed as untestable rather
   than run. Both modes work — *run once for all items* and *run once for each item* — and
   the mode is taken from the node itself, not from your test.
-- **`$('Other node').item` is matched by position**, not by n8n's item linking. In a
-  one-to-one chain that preserves order they agree. Anywhere a node filters, reorders or
-  fans out, n8n follows `pairedItem` and this does not reproduce it: a node relying on
-  `.item` there cannot be tested faithfully here. Use `$('Other node').all()` with explicit
-  indices, or assert on the node that does the pairing instead.
+- **Item linking is not reproduced.** `$('Other node').itemMatching(i)` returns the item at
+  position `i` of the fixture you supplied, and `.item` returns the one at the current
+  position — neither traverses `pairedItem` the way n8n does. In a one-to-one chain that
+  preserves order the answer is the same. Anywhere a node filters, reorders or fans out it
+  is not, and a node that relies on linking cannot be tested faithfully here.
 
 ## Use it in CI
 
 ```yaml
-- run: npx n8n-testkit tests.json
+- run: npm ci
+- run: ./node_modules/.bin/n8n-testkit tests.json
 ```
+
+Install it as a dev dependency and run the local binary rather than `npx`: a bare `npx`
+can fetch a newer version mid-pipeline, and a test tool that changes under you is the one
+thing you cannot have.
 
 Non-zero exit on failure is the whole point: put it in front of the step that imports the
 workflow into production, and a regression stops there instead of in a customer's inbox.
