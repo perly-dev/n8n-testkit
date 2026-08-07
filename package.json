@@ -1,6 +1,6 @@
 {
   "name": "n8n-testkit",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Run the JavaScript in your n8n Code nodes against fixtures and fail the build when it regresses. Refuses what n8n refuses, instead of guessing.",
   "keywords": [
     "n8n",

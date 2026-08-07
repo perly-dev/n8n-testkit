@@ -1,0 +1,11 @@
+
+../lead-intake.workflow.json
+
+  ✗ [OPEN F-02] the documented website honeypot rejects a filled submission
+      0.json.junk  expected true (equals), got false
+      the bundled setup tells the operator to use website as the hidden bot
+      field, but the classifier does not recognise that field
+
+  1 of 1 failed
+
+EXIT_CODE=1

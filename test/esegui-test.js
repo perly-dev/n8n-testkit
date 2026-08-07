@@ -58,7 +58,7 @@ console.log('\nn8n-testkit — banco di prova\n');
 prova('la suite di esempio passa tutta, con codice 0', () => {
   const { uscita, codice } = cli([join(RADICE, 'esempi', 'tests-lead-intake.json')]);
   uguale(codice, 0, 'codice di uscita');
-  contiene(uscita, '10 of 10 passed', 'riepilogo');
+  contiene(uscita, '14 of 14 passed', 'riepilogo');
 });
 
 prova('rompendo il workflow la suite diventa rossa e il comando esce con 1', () => {
@@ -70,7 +70,7 @@ prova('rompendo il workflow la suite diventa rossa e il comando esce con 1', () 
   writeFileSync(wf, mutato);
   const { uscita, codice } = cli([join(dir, 'tests-lead-intake.json')]);
   uguale(codice, 1, 'codice di uscita');
-  contiene(uscita, '1 of 10 failed', 'riepilogo');
+  contiene(uscita, '1 of 14 failed', 'riepilogo');
 });
 
 prova('quando una prova fallisce, il «why» viene stampato', () => {
@@ -437,7 +437,7 @@ prova('«--» permette di provare un file il cui nome comincia per trattino', ()
   // assoluto non provava il caso, perché comincia con «/».
   const { uscita, codice } = cli(['--', '-tests.json'], { cwd: dir });
   uguale(codice, 0, 'codice di uscita');
-  contiene(uscita, '10 of 10 passed', 'riepilogo');
+  contiene(uscita, '14 of 14 passed', 'riepilogo');
   // e senza «--» dev'essere rifiutato come opzione, non letto come file
   const senza = cli(['-tests.json'], { cwd: dir });
   uguale(senza.codice, 2, 'codice di uscita senza --');
@@ -448,7 +448,7 @@ prova('dopo «--» anche un nome che sembra un\'opzione è trattato come file', 
   cpSync(join(dir, 'tests-lead-intake.json'), join(dir, '--version'));
   const { uscita, codice } = cli(['--', '--version'], { cwd: dir });
   uguale(codice, 0, 'codice di uscita');
-  contiene(uscita, '10 of 10 passed', 'deve aver eseguito il file, non stampato la versione');
+  contiene(uscita, '14 of 14 passed', 'deve aver eseguito il file, non stampato la versione');
 });
 
 prova('un commento che nomina un metodo vietato non fa fallire il nodo per-item', () => {
@@ -771,7 +771,7 @@ if (process.argv.includes('--annidato')) {
   const eseguito = spawnSync(eseguibile, ['tests-lead-intake.json'],
     { cwd: progetto, encoding: 'utf8', env: { ...process.env, NO_COLOR: '1' } });
   uguale(eseguito.status, 0, 'codice di uscita del pacchetto installato');
-  contiene(eseguito.stdout, '10 of 10 passed', 'riepilogo');
+  contiene(eseguito.stdout, '14 of 14 passed', 'riepilogo');
   // e il suo «npm test» deve girare: se «files» dimentica test/ o esempi/, no.
   const suo = spawnSync(process.execPath, ['test/esegui-test.js', '--annidato'], {
     cwd: join(progetto, 'node_modules', 'n8n-testkit'), encoding: 'utf8',

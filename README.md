@@ -24,8 +24,12 @@ lead-intake.json
   ✓ awkward names stay readable (0ms)
   ✓ a formula never reaches the spreadsheet alive (0ms)
   ✓ the protection reaches nested fields too (0ms)
+  ✓ a leading + is neutralised too (0ms)
+  ✓ a leading - is neutralised too (0ms)
+  ✓ a leading @ is neutralised too (0ms)
+  ✓ a leading tab is neutralised too (0ms)
 
-  1 of 10 failed
+  1 of 14 failed
 ```
 
 Exit code `1`. Your pipeline stops. Nobody ships a workflow that quietly mangles phone

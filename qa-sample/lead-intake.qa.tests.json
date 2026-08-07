@@ -1,0 +1,465 @@
+{
+  "workflow": "lead-intake.workflow.json",
+  "tests": [
+    {
+      "name": "[F-01] a correctly signed payload crosses the gate unchanged",
+      "node": "Refuse anything unsigned",
+      "env": { "LEAD_WEBHOOK_SECRET": "qa-known-secret" },
+      "input": [
+        {
+          "headers": { "X-Webhook-Key": "qa-known-secret" },
+          "body": { "email": "Buyer@Example.com", "message": "Please contact me about the product." }
+        }
+      ],
+      "expect": [
+        {
+          "path": "length",
+          "value": 1,
+          "why": "a valid request dropped by the authentication node never reaches lead qualification or the sheet"
+        },
+        {
+          "path": "0.json.body.email",
+          "value": "Buyer@Example.com",
+          "why": "the authentication gate must not rewrite the customer payload while checking its header"
+        }
+      ]
+    },
+    {
+      "name": "[F-01] a wrong shared secret is refused",
+      "node": "Refuse anything unsigned",
+      "env": { "LEAD_WEBHOOK_SECRET": "qa-known-secret" },
+      "input": [
+        {
+          "headers": { "x-webhook-key": "wrong-secret" },
+          "body": { "email": "attacker@example.net" }
+        }
+      ],
+      "throws": "missing or wrong x-webhook-key",
+      "why": "accepting an invalid signature creates normal-looking rows from unauthorised callers"
+    },
+    {
+      "name": "[F-01] no configured secret fails closed",
+      "node": "Refuse anything unsigned",
+      "input": [
+        {
+          "headers": { "x-webhook-key": "any-value" },
+          "body": { "email": "attacker@example.net" }
+        }
+      ],
+      "throws": "LEAD_WEBHOOK_SECRET",
+      "why": "a missing deployment variable must stop ingestion rather than silently disable authentication"
+    },
+    {
+      "name": "[F-02] a legitimate website field is not treated as a honeypot",
+      "node": "Spot the junk, with a reason",
+      "input": [
+        {
+          "body": {
+            "email": "buyer@acme.example",
+            "website": "https://acme.example",
+            "message": "We need a quote for our automation project."
+          }
+        }
+      ],
+      "expect": [
+        {
+          "path": "0.json.junk",
+          "value": false,
+          "why": "website is a legitimate business field; treating it as a bot trap silently discards qualified leads"
+        },
+        {
+          "path": "0.json.junk_reason",
+          "value": "",
+          "why": "accepted leads must not carry a rejection reason that can cause a later router to divert them"
+        },
+        {
+          "path": "0.json.received_at",
+          "operator": "matches",
+          "value": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+          "why": "the rejection audit and the accepted-lead row both depend on an ISO receipt timestamp"
+        }
+      ]
+    },
+    {
+      "name": "[F-03] a phone-only call request remains a usable lead",
+      "node": "Spot the junk, with a reason",
+      "input": [
+        {
+          "body": {
+            "email": "not-an-email",
+            "phone": "+39 333 1234567",
+            "message": "Call me"
+          }
+        }
+      ],
+      "expect": [
+        {
+          "path": "0.json.junk",
+          "value": false,
+          "why": "a seven-or-more-digit phone number is a valid contact route even when the message is short and the email is unusable"
+        }
+      ]
+    },
+    {
+      "name": "[F-04] a filled supported honeypot is rejected with an auditable reason",
+      "node": "Spot the junk, with a reason",
+      "input": [
+        {
+          "body": {
+            "email": "bot@example.net",
+            "_gotcha": "https://spam.example",
+            "message": "This otherwise looks long enough to be accepted."
+          }
+        }
+      ],
+      "expect": [
+        {
+          "path": "0.json.junk",
+          "value": true,
+          "why": "if a configured honeypot stops working, automated submissions enter the main leads sheet with green executions"
+        },
+        {
+          "path": "0.json.junk_reason",
+          "operator": "contains",
+          "value": "honeypot field was filled in",
+          "why": "the rejected sheet needs the specific cause so a human can distinguish bots from contact-data failures"
+        }
+      ]
+    },
+    {
+      "name": "[F-05] a disposable-email subdomain is rejected",
+      "node": "Spot the junk, with a reason",
+      "input": [
+        {
+          "body": {
+            "email": "lead@mail.tempmail.com",
+            "message": "Please send full pricing and implementation details."
+          }
+        }
+      ],
+      "expect": [
+        {
+          "path": "0.json.junk",
+          "value": true,
+          "why": "checking only exact disposable domains lets their subdomains enter the accepted-lead branch"
+        },
+        {
+          "path": "0.json.junk_reason",
+          "operator": "contains",
+          "value": "disposable email domain: mail.tempmail.com",
+          "why": "recording the matched domain makes a false positive diagnosable from the rejected sheet"
+        }
+      ]
+    },
+    {
+      "name": "[F-06] three uppercase-scheme links trigger the first-contact limit",
+      "node": "Spot the junk, with a reason",
+      "input": [
+        {
+          "body": {
+            "email": "sender@example.net",
+            "message": "Review HTTPS://one.example and HTTPS://two.example and HTTPS://three.example"
+          }
+        }
+      ],
+      "expect": [
+        {
+          "path": "0.json.junk",
+          "value": true,
+          "why": "the first-contact contract allows at most two links; accepting three sends a link wall to the main leads sheet"
+        },
+        {
+          "path": "0.json.junk_reason",
+          "operator": "contains",
+          "value": "3 links in a first message",
+          "why": "the stored reason must state the observed count so the rejection can be reviewed"
+        }
+      ]
+    },
+    {
+      "name": "[F-03] a submission with no usable contact route is rejected",
+      "node": "Spot the junk, with a reason",
+      "input": [
+        {
+          "body": {
+            "email": "missing-at-sign.example",
+            "phone": "123-45",
+            "message": "This message is long enough but nobody can reply to it."
+          }
+        }
+      ],
+      "expect": [
+        {
+          "path": "0.json.junk",
+          "value": true,
+          "why": "an unreachable submission otherwise creates a normal row that sales can never action"
+        },
+        {
+          "path": "0.json.junk_reason",
+          "operator": "contains",
+          "value": "no usable email address and no phone number",
+          "why": "the audit row must say that contact data, rather than content, caused the rejection"
+        }
+      ]
+    },
+    {
+      "name": "[F-07] an Italian landline keeps its trunk zero",
+      "node": "Normalise the lead",
+      "input": [
+        { "phone": "02 1234567" }
+      ],
+      "expect": [
+        {
+          "path": "0.json.phone",
+          "value": "+39021234567",
+          "why": "for Italian landlines the zero is part of the callable international number; removing it stores a different number"
+        }
+      ]
+    },
+    {
+      "name": "[F-08] a 0039 international number is not prefixed twice",
+      "node": "Normalise the lead",
+      "input": [
+        { "phone": "0039 02 1234567" }
+      ],
+      "expect": [
+        {
+          "path": "0.json.phone",
+          "value": "+39021234567",
+          "why": "0039 already carries a country code; adding the default prefix creates an uncallable +3939 number"
+        }
+      ]
+    },
+    {
+      "name": "[F-09] compound and apostrophised names remain readable",
+      "node": "Normalise the lead",
+      "input": [
+        { "name": "  ANNA-MARIA   de rossi " },
+        { "name": "SEAN O'BRIEN" }
+      ],
+      "expect": [
+        {
+          "path": "0.json.first_name",
+          "value": "Anna-Maria",
+          "why": "flattening a compound given name changes the contact name shown to sales and in replies"
+        },
+        {
+          "path": "0.json.last_name",
+          "value": "De Rossi",
+          "why": "collapsing or mis-casing a multi-token surname makes duplicate review and customer-facing personalisation inconsistent"
+        },
+        {
+          "path": "1.json.last_name",
+          "value": "O'Brien",
+          "why": "apostrophes must survive title-casing or the stored family name is visibly corrupted"
+        }
+      ]
+    },
+    {
+      "name": "[F-10] a corporate email is normalised and classified by domain",
+      "node": "Normalise the lead",
+      "input": [
+        { "email": "  Alice@Sub.Acme.Example  " }
+      ],
+      "expect": [
+        {
+          "path": "0.json.email",
+          "value": "alice@sub.acme.example",
+          "why": "case and surrounding whitespace create duplicate contacts and failed exact-match lookups"
+        },
+        {
+          "path": "0.json.company_domain",
+          "value": "sub.acme.example",
+          "why": "the company-domain column drives account grouping and must be derived from the normalised address"
+        },
+        {
+          "path": "0.json.business_email",
+          "value": true,
+          "why": "a corporate address mislabelled as free mail changes downstream qualification and routing"
+        }
+      ]
+    },
+    {
+      "name": "[F-10] Gmail is not presented as a company domain",
+      "node": "Normalise the lead",
+      "input": [
+        { "email": "person+campaign@gmail.com" }
+      ],
+      "expect": [
+        {
+          "path": "0.json.company_domain",
+          "value": "",
+          "why": "grouping Gmail contacts under a fictional Gmail account corrupts account-level reporting"
+        },
+        {
+          "path": "0.json.business_email",
+          "value": false,
+          "why": "free-mail contacts must not receive the business-email qualification flag"
+        }
+      ]
+    },
+    {
+      "name": "[F-11] comments and utm_source aliases reach their canonical columns",
+      "node": "Normalise the lead",
+      "input": [
+        {
+          "comments": "  Need   pricing\nfor five workflows.  ",
+          "utm_source": "partner-referral"
+        }
+      ],
+      "expect": [
+        {
+          "path": "0.json.message",
+          "value": "Need pricing for five workflows.",
+          "why": "forms that send comments instead of message must not produce a blank sales note"
+        },
+        {
+          "path": "0.json.source",
+          "value": "partner-referral",
+          "why": "losing utm_source silently attributes paid or partner leads to the generic web-form bucket"
+        }
+      ]
+    },
+    {
+      "name": "[F-12] an upstream receipt timestamp is preserved",
+      "node": "Normalise the lead",
+      "input": [
+        { "received_at": "2026-08-08T21:15:00.000Z" }
+      ],
+      "expect": [
+        {
+          "path": "0.json.received_at",
+          "value": "2026-08-08T21:15:00.000Z",
+          "why": "replacing the ingestion time with a later node time changes response-time and ordering metrics"
+        }
+      ]
+    },
+    {
+      "name": "[F-07] a number beyond the E.164 digit limit is not stored as callable",
+      "node": "Normalise the lead",
+      "input": [
+        { "phone": "+39 333 1234567 ext 123456" }
+      ],
+      "expect": [
+        {
+          "path": "0.json.phone",
+          "value": "",
+          "why": "storing more than 15 digits as an international phone number makes an invalid value look callable"
+        }
+      ]
+    },
+    {
+      "name": "[F-13] spreadsheet control prefixes are neutralised",
+      "node": "Make it safe for a spreadsheet",
+      "input": [
+        {
+          "first_name": "=HYPERLINK(\"https://attacker.example\",\"open\")",
+          "last_name": "+1+1",
+          "message": "-2+3",
+          "source": "@IMPORTXML",
+          "email": "normal@example.com"
+        }
+      ],
+      "expect": [
+        {
+          "path": "0.json.first_name",
+          "operator": "matches",
+          "value": "^'=HYPERLINK",
+          "why": "Google Sheets USER_ENTERED mode executes a leading equals sign as a formula"
+        },
+        {
+          "path": "0.json.last_name",
+          "value": "'+1+1",
+          "why": "a leading plus can also be interpreted as a spreadsheet formula"
+        },
+        {
+          "path": "0.json.message",
+          "value": "'-2+3",
+          "why": "a leading minus must be stored as text rather than evaluated input"
+        },
+        {
+          "path": "0.json.source",
+          "value": "'@IMPORTXML",
+          "why": "a leading at-sign is part of the protected spreadsheet-control prefix set"
+        },
+        {
+          "path": "0.json.email",
+          "value": "normal@example.com",
+          "why": "neutralisation must not alter ordinary values while protecting dangerous ones"
+        }
+      ]
+    },
+    {
+      "name": "[F-14] spreadsheet neutralisation reaches nested objects and arrays",
+      "node": "Make it safe for a spreadsheet",
+      "input": [
+        {
+          "metadata": {
+            "note": "=1+1",
+            "tags": ["safe", "=CMD()"]
+          }
+        }
+      ],
+      "expect": [
+        {
+          "path": "0.json.metadata.note",
+          "value": "'=1+1",
+          "why": "an unprotected formula inside an object still reaches an auto-mapped spreadsheet column when the payload shape expands"
+        },
+        {
+          "path": "0.json.metadata.tags.1",
+          "value": "'=CMD()",
+          "why": "array members require the same recursive protection as top-level strings"
+        },
+        {
+          "path": "0.json.metadata.tags.0",
+          "value": "safe",
+          "why": "recursive traversal must preserve non-dangerous array values"
+        }
+      ]
+    },
+    {
+      "name": "[F-15] rejected-lead logging keeps only the audit fields",
+      "node": "Keep three fields, safely",
+      "input": [
+        {
+          "received_at": "2026-08-08T21:15:00.000Z",
+          "email": "bot@example.net",
+          "junk_reason": "=HYPERLINK(\"https://attacker.example\",\"review\")",
+          "message": "sensitive message that does not belong in the rejected sheet",
+          "phone": "+39 333 0000000"
+        }
+      ],
+      "expect": [
+        {
+          "path": "0.json",
+          "value": {
+            "received_at": "2026-08-08T21:15:00.000Z",
+            "email": "bot@example.net",
+            "reason": "'=HYPERLINK(\"https://attacker.example\",\"review\")"
+          },
+          "why": "the rejected sheet is an audit log, not a second copy of message and phone data, and its reason still needs formula protection"
+        }
+      ]
+    },
+    {
+      "name": "[F-15] rejected email storage is bounded",
+      "node": "Keep three fields, safely",
+      "input": [
+        {
+          "received_at": "2026-08-08T21:15:00.000Z",
+          "email": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa@example.net",
+          "junk_reason": "invalid contact data"
+        }
+      ],
+      "expect": [
+        {
+          "path": "0.json.email",
+          "operator": "length",
+          "value": 200,
+          "why": "unbounded attacker-controlled email text can inflate the rejected sheet while every workflow execution remains green"
+        }
+      ]
+    }
+  ]
+}

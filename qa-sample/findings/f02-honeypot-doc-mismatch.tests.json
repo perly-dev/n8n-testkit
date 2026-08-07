@@ -1,0 +1,25 @@
+{
+  "workflow": "../lead-intake.workflow.json",
+  "tests": [
+    {
+      "name": "[OPEN F-02] the documented website honeypot rejects a filled submission",
+      "node": "Spot the junk, with a reason",
+      "input": [
+        {
+          "body": {
+            "email": "bot@example.net",
+            "website": "https://spam.example",
+            "message": "This payload satisfies every other acceptance condition."
+          }
+        }
+      ],
+      "expect": [
+        {
+          "path": "0.json.junk",
+          "value": true,
+          "why": "the bundled setup tells the operator to use website as the hidden bot field, but the classifier does not recognise that field"
+        }
+      ]
+    }
+  ]
+}

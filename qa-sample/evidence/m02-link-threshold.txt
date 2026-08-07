@@ -1,0 +1,34 @@
+
+m02-link-threshold.workflow.json
+
+  ✓ [F-01] a correctly signed payload crosses the gate unchanged (1ms)
+  ✓ [F-01] a wrong shared secret is refused (0ms)
+  ✓ [F-01] no configured secret fails closed (0ms)
+  ✓ [F-02] a legitimate website field is not treated as a honeypot (1ms)
+  ✓ [F-03] a phone-only call request remains a usable lead (0ms)
+  ✓ [F-04] a filled supported honeypot is rejected with an auditable reason (0ms)
+  ✓ [F-05] a disposable-email subdomain is rejected (0ms)
+  ✗ [F-06] three uppercase-scheme links trigger the first-contact limit
+      0.json.junk  expected true (equals), got false
+      the first-contact contract allows at most two links; accepting three
+      sends a link wall to the main leads sheet
+      0.json.junk_reason  expected "3 links in a first message" (contains), got ""
+      the stored reason must state the observed count so the rejection can be
+      reviewed
+  ✓ [F-03] a submission with no usable contact route is rejected (0ms)
+  ✓ [F-07] an Italian landline keeps its trunk zero (0ms)
+  ✓ [F-08] a 0039 international number is not prefixed twice (0ms)
+  ✓ [F-09] compound and apostrophised names remain readable (1ms)
+  ✓ [F-10] a corporate email is normalised and classified by domain (0ms)
+  ✓ [F-10] Gmail is not presented as a company domain (0ms)
+  ✓ [F-11] comments and utm_source aliases reach their canonical columns (0ms)
+  ✓ [F-12] an upstream receipt timestamp is preserved (0ms)
+  ✓ [F-07] a number beyond the E.164 digit limit is not stored as callable (0ms)
+  ✓ [F-13] spreadsheet control prefixes are neutralised (0ms)
+  ✓ [F-14] spreadsheet neutralisation reaches nested objects and arrays (0ms)
+  ✓ [F-15] rejected-lead logging keeps only the audit fields (1ms)
+  ✓ [F-15] rejected email storage is bounded (0ms)
+
+  1 of 21 failed
+
+EXIT_CODE=1
