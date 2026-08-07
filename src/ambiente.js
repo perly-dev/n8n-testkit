@@ -7,6 +7,82 @@
  * che ogni prova mandi email vere e scriva righe vere nei fogli di calcolo.
  */
 
+import { compileFunction, runInNewContext } from 'node:vm';
+
+// Un contesto VM vuoto contiene gli intrinseci JavaScript (Object, Array,
+// Promise, …), ma non i globali aggiunti da Node. n8n ne reinserisce
+// esplicitamente solo questi. Calcolare la differenza evita che un nuovo
+// globale aggiunto da Node 24 passi per caso mentre su Node 18 non esisteva.
+const GLOBALI_JS = new Set(runInNewContext('Object.getOwnPropertyNames(globalThis)'));
+const GLOBALI_NATIVI_N8N = new Set([
+  'Buffer',
+  'setTimeout', 'setInterval', 'setImmediate',
+  'clearTimeout', 'clearInterval', 'clearImmediate',
+  'btoa', 'atob',
+  'TextDecoder', 'TextDecoderStream', 'TextEncoder', 'TextEncoderStream',
+  'FormData',
+]);
+const GLOBALI_NODE_NON_N8N = new Set(
+  Object.getOwnPropertyNames(globalThis)
+    .filter((nome) => !GLOBALI_JS.has(nome) && !GLOBALI_NATIVI_N8N.has(nome) && nome !== 'global')
+);
+
+function erroreGlobale(nome) {
+  return new Error(
+    `Global "${String(nome)}" exists in Node.js but is not exposed by n8n's default ` +
+    `Code-node runtime. n8n-testkit blocked it instead of giving this test a false green.`
+  );
+}
+
+/**
+ * Costruisce il profilo di compatibilità dei globali. Non è isolamento di
+ * sicurezza: rende indisponibili gli accessi normali, globalThis/global/this e
+ * require(), ma codice ostile può cercare vie riflessive per uscire dal profilo.
+ */
+function creaProfiloGlobali(ambiente) {
+  const ambito = Object.assign(Object.create(null), ambiente);
+
+  for (const nome of GLOBALI_NODE_NON_N8N) {
+    if (Object.prototype.hasOwnProperty.call(ambito, nome)) continue;
+    Object.defineProperty(ambito, nome, {
+      enumerable: true,
+      configurable: false,
+      get() { throw erroreGlobale(nome); },
+    });
+  }
+
+  const requireN8n = (nome) => {
+    throw new Error(
+      `Module ${JSON.stringify(String(nome))} is not available in n8n's default Code-node ` +
+      `runtime: require() is disabled unless a self-hosted instance explicitly allowlists ` +
+      `that module. n8n-testkit uses the default profile and does not load modules.`
+    );
+  };
+  Object.defineProperty(ambito, 'require', { enumerable: true, value: requireN8n });
+  Object.defineProperty(ambito, 'module', { enumerable: true, value: { exports: {} } });
+
+  let globale;
+  globale = new Proxy(globalThis, {
+    get(target, prop, receiver) {
+      if (prop === 'globalThis' || prop === 'global') return receiver;
+      if (Object.prototype.hasOwnProperty.call(ambito, prop)) return Reflect.get(ambito, prop);
+      if (GLOBALI_NODE_NON_N8N.has(prop)) throw erroreGlobale(prop);
+      return Reflect.get(target, prop, receiver);
+    },
+    has(target, prop) {
+      if (GLOBALI_NODE_NON_N8N.has(prop)) throw erroreGlobale(prop);
+      return Object.prototype.hasOwnProperty.call(ambito, prop) || Reflect.has(target, prop);
+    },
+    getOwnPropertyDescriptor(target, prop) {
+      if (GLOBALI_NODE_NON_N8N.has(prop)) throw erroreGlobale(prop);
+      return Object.getOwnPropertyDescriptor(ambito, prop) || Reflect.getOwnPropertyDescriptor(target, prop);
+    },
+  });
+  Object.defineProperty(ambito, 'globalThis', { enumerable: true, value: globale });
+  Object.defineProperty(ambito, 'global', { enumerable: true, value: globale });
+  return { ambito, globale };
+}
+
 /** Avvolge dei dati grezzi nella forma { json } che n8n usa fra un nodo e l'altro. */
 export function comeItem(x) {
   if (x && typeof x === 'object' && 'json' in x) return x;
@@ -78,30 +154,51 @@ export function creaAmbiente({ input = [], nodi = {}, env = {}, vars = {}, adess
       // sempre il primo. Qui si usa la posizione: è l'abbinamento vero nel caso
       // normale (stesso numero di elementi), e il limite è scritto nel README.
       item: dati[indice] ?? dati[0],
-      itemMatching: (i) => dati[i],
+      // itemMatching non significa «prendi la posizione i»: n8n attraversa la
+      // catena pairedItem delle esecuzioni intermedie. Le fixture contengono
+      // snapshot, non quella catena completa; indovinare dava falsi verdi appena
+      // un nodo filtrava, riordinava o duplicava item.
+      itemMatching: (i) => {
+        throw new Error(
+          `$('${nome}').itemMatching(${JSON.stringify(i)}) needs n8n's paired-item ` +
+          `execution graph. Fixtures under "nodes" are output snapshots, so n8n-testkit ` +
+          `cannot trace that link and will not guess by position. Use .all()[i] only if ` +
+          `position is what your workflow actually means.`
+        );
+      },
     };
   };
 
-  // n8n espone $now come oggetto Luxon. Qui basta qualcosa che risponda a
-  // toISO() e toString(): sono gli usi che si incontrano davvero nei Code node.
+  // n8n espone $now come oggetto Luxon. Riprodurre l'aritmetica senza Luxon,
+  // timezone e DST darebbe risposte credibili ma sbagliate; i quattro metodi
+  // indipendenti da quella semantica funzionano, ogni altro accesso si ferma con
+  // un messaggio che dichiara il confine invece di «is not a function».
+  const dataCompatibile = (nome, data) => new Proxy({
+    toISO: () => data.toISOString(),
+    toString: () => data.toISOString(),
+    toMillis: () => data.getTime(),
+    valueOf: () => data.getTime(),
+  }, {
+    get(target, prop, receiver) {
+      if (typeof prop === 'string' && !(prop in target)) {
+        throw new Error(
+          `${nome}.${prop} is a Luxon feature that n8n-testkit does not reproduce. ` +
+          `Supported methods are toISO(), toMillis(), toString(), and valueOf(); ` +
+          `test this node in n8n if it needs Luxon arithmetic, zones, formatting, or properties.`
+        );
+      }
+      return Reflect.get(target, prop, receiver);
+    },
+  });
+
   const base = istante || new Date();
-  const $now = {
-    toISO: () => base.toISOString(),
-    toString: () => base.toISOString(),
-    toMillis: () => base.getTime(),
-    valueOf: () => base.getTime(),
-  };
+  const $now = dataCompatibile('$now', base);
 
   // $today in n8n è l'inizio del giorno, non «adesso». Restituire $now faceva
   // passare prove che in produzione si comportano in un altro modo.
   const mezzanotte = new Date(base);
   mezzanotte.setUTCHours(0, 0, 0, 0);
-  const $today = {
-    toISO: () => mezzanotte.toISOString(),
-    toString: () => mezzanotte.toISOString(),
-    toMillis: () => mezzanotte.getTime(),
-    valueOf: () => mezzanotte.getTime(),
-  };
+  const $today = dataCompatibile('$today', mezzanotte);
 
   return {
     $input, $, $env: env, $vars: vars, $now,
@@ -116,25 +213,40 @@ export function creaAmbiente({ input = [], nodi = {}, env = {}, vars = {}, adess
 /**
  * Esegue il codice di un nodo Code e restituisce quello che restituirebbe in n8n.
  *
- * Il codice gira in una funzione con le variabili di n8n come parametri: non è
- * una sandbox di sicurezza e non pretende di esserlo — stai eseguendo un
- * workflow che è già tuo. Serve a riprodurre il comportamento, non a difendersi.
+ * Il codice gira in una funzione con le variabili n8n e il profilo globale di
+ * compatibilità: non è una sandbox di sicurezza e non pretende di esserlo —
+ * stai eseguendo un workflow che è già tuo. Serve a riprodurre il comportamento,
+ * non a difendersi.
  */
-// I Code node di n8n possono usare «await», e molti lo fanno. Compilandoli come
-// funzione normale fallivano con «await is only valid in async functions»: un
-// messaggio che fa sembrare rotto lo strumento invece del workflow.
-const FunzioneAsync = Object.getPrototypeOf(async function () {}).constructor;
-
 export async function eseguiNodoCode(codice, ambiente, { singolo = false } = {}) {
-  const nomi = Object.keys(ambiente);
-  const valori = nomi.map((n) => ambiente[n]);
+  const { ambito, globale } = creaProfiloGlobali(ambiente);
   let fn;
   try {
-    fn = new FunzioneAsync(...nomi, codice);
+    // compileFunction mantiene gli oggetti nel realm corrente (quindi i
+    // confronti profondi e instanceof continuano a funzionare), ma permette un
+    // ambito globale aggiuntivo con getter che fermano i globali Node-only.
+    // Il wrapper async conserva await e i return al livello principale.
+    fn = compileFunction(
+      `return (async function () {\n${codice}\n}).call(this);`,
+      [],
+      { contextExtensions: [ambito] }
+    );
   } catch (e) {
     throw new Error(`The node's code does not compile: ${e.message}`);
   }
-  const uscita = await fn(...valori);
+  let uscita;
+  try {
+    uscita = await fn.call(globale);
+  } catch (e) {
+    if (e && e.code === 'ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING') {
+      throw new Error(
+        `Dynamic import() is not available in n8n's default Code-node runtime. ` +
+        `Modules are disabled unless a self-hosted instance explicitly allowlists them; ` +
+        `n8n-testkit uses the default profile and does not load modules.`
+      );
+    }
+    throw e;
+  }
 
   // n8n pretende degli ITEM. Accettare null, un numero o un json che non è un
   // oggetto lasciava passare del codice che in produzione fallisce: lo stesso

@@ -148,6 +148,64 @@ prova('«equals» distingue ancora valori davvero diversi', () => {
   uguale(codice, 1, 'codice di uscita');
 });
 
+prova('gli operatori numerici non trasformano valori non numerici in zero o uno', () => {
+  // Ognuno di questi confronti passava con Number(): se si ripristina quella
+  // coercizione, la CLI esce 0 e questa prova diventa rossa.
+  const casi = [
+    ['null', 'null', 'greaterThan', -1],
+    ['stringa vuota', "''", 'greaterThan', -1],
+    ['array vuoto', '[]', 'greaterThan', -1],
+    ['booleano', 'true', 'greaterThan', 0],
+    ['NaN', 'NaN', 'lessThan', 1],
+    ['infinito', 'Infinity', 'greaterThan', 1],
+  ];
+  for (const [nome, valore, operator, atteso] of casi) {
+    const { uscita, codice } = conNodo(`return [{json:{v:${valore}}}];`, [{
+      name: nome, node: 'N', input: [{}],
+      expect: [{ path: '0.json.v', operator, value: atteso }],
+    }]);
+    uguale(codice, 1, `codice di uscita per ${nome}`);
+    contiene(uscita, 'must be a finite number or a non-empty numeric string', `messaggio per ${nome}`);
+  }
+});
+
+prova('un campo mancante in un confronto numerico fallisce con il percorso e il motivo', () => {
+  const { uscita, codice } = conNodo('return [{json:{}}];', [{
+    name: 'campo mancante', node: 'N', input: [{}],
+    expect: [{ path: '0.json.amount', operator: 'greaterThan', value: -1 }],
+  }]);
+  uguale(codice, 1, 'codice di uscita');
+  contiene(uscita, 'Value at path "0.json.amount"', 'percorso');
+  contiene(uscita, 'undefined (the path is missing)', 'motivo');
+});
+
+prova('numeri e stringhe numeriche finite restano validi in tutti gli operatori numerici', () => {
+  const { codice } = conNodo("return [{json:{n:' 42 ', decimale:4.2}}];", [{
+    name: 'valori da form', node: 'N', input: [{}], expect: [
+      { path: '0.json.n', operator: 'greaterThan', value: '41' },
+      { path: '0.json.n', operator: 'lessThan', value: 43 },
+      { path: '0.json.n', operator: 'between', value: ['40', '50'] },
+      { path: '0.json.decimale', operator: 'between', value: [4, '4.5'] },
+    ],
+  }]);
+  uguale(codice, 0, 'codice di uscita');
+});
+
+prova('anche le soglie numeriche malformate vengono spiegate, non convertite', () => {
+  const casi = [
+    [{ path: '0.json.n', operator: 'greaterThan', value: true }, 'Expected value for "greaterThan"'],
+    [{ path: '0.json.n', operator: 'between', value: [0, null] }, 'Maximum for "between"'],
+    [{ path: '0.json.n', operator: 'between', value: 5 }, 'two-value list [min, max]'],
+  ];
+  for (const [asserzione, messaggio] of casi) {
+    const { uscita, codice } = conNodo('return [{json:{n:2}}];', [{
+      name: messaggio, node: 'N', input: [{}], expect: [asserzione],
+    }]);
+    uguale(codice, 1, `codice di uscita per ${messaggio}`);
+    contiene(uscita, messaggio, 'spiegazione');
+  }
+});
+
 prova('«throws» confronta testo letterale, non un\'espressione regolare', () => {
   // «cost [EUR] missing» come regex non corrisponde a se stesso: il rapporto
   // mostrava due stringhe identiche e la prova rossa.
@@ -192,6 +250,75 @@ prova('una prova scritta male non porta giù le altre', () => {
 prova('un Code node che usa «await» gira davvero', () => {
   const { codice } = conNodo('const x = await Promise.resolve(7);\nreturn [{json:{x}}];',
     [{ name: 'await', node: 'N', input: [{}], expect: [{ path: '0.json.x', value: 7 }] }]);
+  uguale(codice, 0, 'codice di uscita');
+});
+
+prova('i globali Node-only vengono fermati anche attraverso globalThis, global e this', () => {
+  const casi = [
+    ['process diretto', 'process.version', 'Global "process"'],
+    ['fetch diretto', 'typeof fetch', 'Global "fetch"'],
+    ['globalThis', 'globalThis.process.version', 'Global "process"'],
+    ['global', 'global.fetch', 'Global "fetch"'],
+    ['this', 'this.process.version', 'Global "process"'],
+    ['URL', "new URL('https://example.com').host", 'Global "URL"'],
+    ['structuredClone', 'structuredClone({ a: 1 })', 'Global "structuredClone"'],
+  ];
+  for (const [nome, espressione, messaggio] of casi) {
+    const { codice } = conNodo(`return [{json:{v:${espressione}}}];`,
+      [{ name: nome, node: 'N', input: [{}], throws: messaggio }]);
+    uguale(codice, 0, `profilo globale per ${nome}`);
+  }
+});
+
+prova('require indiretto e le altre vie normali al filesystem non danno un falso verde', () => {
+  const casi = [
+    ["const load = require; load('node:fs'); return [];", 'Module "node:fs" is not available'],
+    ["process.getBuiltinModule('node:fs'); return [];", 'Global "process"'],
+    ["await import('node:fs'); return [];", 'Dynamic import() is not available'],
+  ];
+  for (const [codiceNodo, messaggio] of casi) {
+    const { codice } = conNodo(codiceNodo,
+      [{ name: messaggio, node: 'N', input: [{}], throws: messaggio }]);
+    uguale(codice, 0, `compatibilità per ${messaggio}`);
+  }
+});
+
+prova('il profilo conserva i globali che n8n espone e permette omonimi locali', () => {
+  const jsCode = `
+    const process = { version: 'locale' };
+    const fetch = 'locale';
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    return [{json:{
+      hex: Buffer.from('A').toString('hex'),
+      global: global === globalThis,
+      module: typeof module,
+      require: typeof require,
+      locali: process.version + ':' + fetch,
+      nativi: {
+        Buffer: typeof Buffer,
+        setTimeout: typeof setTimeout, setInterval: typeof setInterval, setImmediate: typeof setImmediate,
+        clearTimeout: typeof clearTimeout, clearInterval: typeof clearInterval, clearImmediate: typeof clearImmediate,
+        atob: typeof atob, btoa: typeof btoa,
+        TextDecoder: typeof TextDecoder, TextDecoderStream: typeof TextDecoderStream,
+        TextEncoder: typeof TextEncoder, TextEncoderStream: typeof TextEncoderStream,
+        FormData: typeof FormData,
+      },
+    }}];`;
+  const nativi = [
+    'Buffer', 'setTimeout', 'setInterval', 'setImmediate',
+    'clearTimeout', 'clearInterval', 'clearImmediate', 'atob', 'btoa',
+    'TextDecoder', 'TextDecoderStream', 'TextEncoder', 'TextEncoderStream', 'FormData',
+  ];
+  const { codice } = conNodo(jsCode, [{
+    name: 'globali n8n', node: 'N', input: [{}], expect: [
+      { path: '0.json.hex', value: '41' },
+      { path: '0.json.global', value: true },
+      { path: '0.json.module', value: 'object' },
+      { path: '0.json.require', value: 'function' },
+      { path: '0.json.locali', value: 'locale:locale' },
+      ...nativi.map((nome) => ({ path: `0.json.nativi.${nome}`, value: 'function' })),
+    ],
+  }]);
   uguale(codice, 0, 'codice di uscita');
 });
 
@@ -402,6 +529,26 @@ prova('«$(\'Nodo\').item» segue la posizione dell\'elemento in lavorazione', (
   uguale(codice, 0, 'codice di uscita');
 });
 
+prova('itemMatching rifiuta il vecchio abbinamento posizionale con un errore utile', () => {
+  // Col vecchio dati[i] questo nodo restituisceva proprio «due» e la prova
+  // throws diventava rossa: così controlliamo il rifiuto, non solo la frase.
+  const messaggio = "needs n8n's paired-item execution graph";
+  const { codice } = conNodo('return [{json:{v:$("Prima").itemMatching(1).json.v}}];', [{
+    name: 'non indovinare il link', node: 'N', input: [{ a: 1 }, { a: 2 }],
+    nodes: { Prima: [{ v: 'uno' }, { v: 'due' }] }, throws: messaggio,
+  }]);
+  uguale(codice, 0, 'codice di uscita');
+});
+
+prova('chi vuole davvero la posizione può ancora usare all()[i] esplicitamente', () => {
+  const { codice } = conNodo('return [{json:{v:$("Prima").all()[1].json.v}}];', [{
+    name: 'posizione esplicita', node: 'N', input: [{}],
+    nodes: { Prima: [{ v: 'uno' }, { v: 'due' }] },
+    expect: [{ path: '0.json.v', value: 'due' }],
+  }]);
+  uguale(codice, 0, 'codice di uscita');
+});
+
 prova('«--nodes» non presenta come provabile un nodo che non si può eseguire', () => {
   const dir = cartellaDiProva();
   writeFileSync(join(dir, 'wf.json'), JSON.stringify({
@@ -431,6 +578,29 @@ prova('«$today» è la mezzanotte del giorno, non l\'istante di «$now»', () =
     [{ name: 'today', node: 'N', input: [{}], now: '2020-06-15T12:30:00.000Z',
        expect: [{ path: '0.json.t', value: '2020-06-15T00:00:00.000Z' }] }]);
   uguale(codice, 0, 'codice di uscita');
+});
+
+prova('i metodi Luxon non implementati falliscono col confine dichiarato', () => {
+  const casi = [
+    ['$now', 'plus', '{ days: 1 }'],
+    ['$now', 'minus', '{ hours: 2 }'],
+    ['$now', 'startOf', "'day'"],
+    ['$now', 'diff', '$today'],
+    ['$now', 'toFormat', "'yyyy-MM-dd'"],
+    ['$today', 'plus', '{ days: 1 }'],
+  ];
+  for (const [oggetto, metodo, argomento] of casi) {
+    const messaggio = `${oggetto}.${metodo} is a Luxon feature`;
+    const { codice } = conNodo(`return [{json:{v:${oggetto}.${metodo}(${argomento})}}];`, [{
+      name: messaggio, node: 'N', input: [{}], now: '2020-01-02T03:04:05.000Z', throws: messaggio,
+    }]);
+    uguale(codice, 0, `codice di uscita per ${oggetto}.${metodo}`);
+  }
+  const proprieta = conNodo('return [{json:{zone:$now.zoneName}}];', [{
+    name: 'proprietà Luxon', node: 'N', input: [{}],
+    throws: '$now.zoneName is a Luxon feature',
+  }]);
+  uguale(proprieta.codice, 0, 'codice di uscita per una proprietà Luxon');
 });
 
 prova('la riga di comando non mostra mai uno stack trace a chi sbaglia un file', () => {
@@ -536,18 +706,30 @@ prova('le frasi che il README cita fra virgolette esistono nel codice', () => {
   for (const q of citazioni) contiene(sorgente, q, 'frase citata dal README');
 });
 
+prova('il README dichiara tutti i nuovi confini di compatibilità provati dal banco', () => {
+  const promesse = [
+    'do **not** use JavaScript\'s broad `Number()` coercion',
+    '`process`, `fetch`',
+    "n8n's default deny-all module policy is reproduced",
+    'produces an explicit unsupported-Luxon error',
+    '`itemMatching(i)` now fails explicitly',
+    'compatibility check, not a security boundary',
+  ];
+  for (const promessa of promesse) contiene(README, promessa, 'confine non documentato');
+});
+
 prova('il pacchetto non ha dipendenze, come dichiara il README', () => {
   const pkg = JSON.parse(readFileSync(join(RADICE, 'package.json'), 'utf8'));
   uguale(Object.keys(pkg.dependencies || {}).length, 0, 'dipendenze');
   contiene(README, 'No dependencies', 'dichiarazione nel README');
 });
 
-prova('$now espone esattamente i metodi che il README dichiara', () => {
+prova('$now espone tutti e soli i metodi di base che il README dichiara', () => {
   const dir = cartellaDiProva();
   writeFileSync(join(dir, 'wf.json'), JSON.stringify({
     name: 'clock',
     nodes: [{ name: 'Clock', type: 'n8n-nodes-base.code', parameters: {
-      jsCode: 'return [{json:{iso:$now.toISO(), ms:$now.toMillis(), s:$now.toString()}}];' } }],
+      jsCode: 'return [{json:{iso:$now.toISO(), ms:$now.toMillis(), s:$now.toString(), value:$now.valueOf()}}];' } }],
   }));
   writeFileSync(join(dir, 't.json'), JSON.stringify({
     workflow: 'wf.json',
@@ -555,6 +737,7 @@ prova('$now espone esattamente i metodi che il README dichiara', () => {
       { path: '0.json.iso', value: '2020-01-02T03:04:05.000Z' },
       { path: '0.json.ms', value: 1577934245000 },
       { path: '0.json.s', value: '2020-01-02T03:04:05.000Z' },
+      { path: '0.json.value', value: 1577934245000 },
     ] }],
   }));
   const { codice } = cli([join(dir, 't.json')]);

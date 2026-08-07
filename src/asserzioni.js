@@ -39,6 +39,41 @@ export function leggiPercorso(dati, percorso) {
 // dipende da come il nodo le ha costruite, quindi era un rosso a caso.
 const uguali = (a, b) => isDeepStrictEqual(a, b);
 
+/**
+ * I confronti numerici accettano numeri veri e stringhe numeriche non vuote.
+ * Tutto il resto è un errore di prova, non uno zero implicito: Number(null),
+ * Number(''), Number([]) e Number(true) sono conversioni JavaScript valide ma
+ * pessime per un test, perché possono trasformare un campo assente in un verde.
+ */
+class ErroreNumerico extends Error {}
+
+function descriviValore(v) {
+  if (v === undefined) return 'undefined (the path is missing)';
+  if (typeof v === 'number' && Number.isNaN(v)) return 'NaN';
+  if (v === Infinity) return 'Infinity';
+  if (v === -Infinity) return '-Infinity';
+  try {
+    const json = JSON.stringify(v);
+    return json === undefined ? String(v) : json;
+  } catch {
+    return String(v);
+  }
+}
+
+function numeroFinito(v, ruolo) {
+  if (typeof v === 'number' && Number.isFinite(v)) return v;
+  if (typeof v === 'string' && v.trim() !== '') {
+    const convertito = Number(v);
+    if (Number.isFinite(convertito)) return convertito;
+  }
+  throw new ErroreNumerico(
+    `${ruolo} must be a finite number or a non-empty numeric string; got ${descriviValore(v)}.`
+  );
+}
+
+const valoreNumerico = (v, a) => numeroFinito(v, `Value at path "${a.path}"`);
+const attesoNumerico = (v, op) => numeroFinito(v, `Expected value for "${op}"`);
+
 const OPERATORI = {
   equals: (a, b) => uguali(a, b),
   notEquals: (a, b) => !uguali(a, b),
@@ -50,9 +85,22 @@ const OPERATORI = {
                 (Array.isArray(a) && a.length === 0),
   notEmpty: (a) => !(a === undefined || a === null || a === '' ||
                     (Array.isArray(a) && a.length === 0)),
-  between: (a, [min, max]) => Number(a) >= min && Number(a) <= max,
-  greaterThan: (a, b) => Number(a) > Number(b),
-  lessThan: (a, b) => Number(a) < Number(b),
+  between: (a, intervallo, asserzione) => {
+    if (!Array.isArray(intervallo) || intervallo.length !== 2) {
+      throw new ErroreNumerico(
+        `Expected value for "between" must be a two-value list [min, max]; ` +
+        `got ${descriviValore(intervallo)}.`
+      );
+    }
+    const valore = valoreNumerico(a, asserzione);
+    const min = numeroFinito(intervallo[0], 'Minimum for "between"');
+    const max = numeroFinito(intervallo[1], 'Maximum for "between"');
+    return valore >= min && valore <= max;
+  },
+  greaterThan: (a, b, asserzione) =>
+    valoreNumerico(a, asserzione) > attesoNumerico(b, 'greaterThan'),
+  lessThan: (a, b, asserzione) =>
+    valoreNumerico(a, asserzione) < attesoNumerico(b, 'lessThan'),
   oneOf: (a, b) => (Array.isArray(b) ? b : [b]).some((x) => uguali(x, a)),
   length: (a, b) => (a?.length ?? -1) === b,
 };
@@ -79,11 +127,13 @@ export function verifica(risultato, asserzioni = []) {
     const ottenuto = leggiPercorso(risultato, a.path);
     let passa;
     try {
-      passa = fn(ottenuto, a.value);
+      passa = fn(ottenuto, a.value, a);
     } catch (e) {
       fallimenti.push({
         path: a.path,
-        message: `the assertion itself threw: ${motivo(e)}`,
+        message: e instanceof ErroreNumerico
+          ? motivo(e)
+          : `the assertion itself threw: ${motivo(e)}`,
         why: a.why || null,
       });
       continue;

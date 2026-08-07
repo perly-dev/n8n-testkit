@@ -1,16 +1,42 @@
 {
   "name": "n8n-testkit",
-  "version": "0.1.1",
-  "description": "Run the JavaScript in your n8n Code nodes against fixtures and fail the build when it regresses. No n8n instance, no credentials.",
-  "keywords": ["n8n", "testing", "regression", "workflow", "ci", "automation", "assertions"],
+  "version": "0.2.0",
+  "description": "Run the JavaScript in your n8n Code nodes against fixtures and fail the build when it regresses. Refuses what n8n refuses, instead of guessing.",
+  "keywords": [
+    "n8n",
+    "testing",
+    "regression",
+    "workflow",
+    "ci",
+    "automation",
+    "assertions"
+  ],
   "license": "MIT",
   "author": "perly-dev",
   "type": "module",
-  "bin": { "n8n-testkit": "./bin/n8n-testkit.js" },
-  "files": ["bin", "src", "test", "esempi", "README.md", "LICENSE"],
-  "engines": { "node": ">=18" },
-  "scripts": { "test": "node test/esegui-test.js" },
-  "repository": { "type": "git", "url": "git+https://github.com/perly-dev/n8n-testkit.git" },
-  "bugs": { "url": "https://github.com/perly-dev/n8n-testkit/issues" },
+  "bin": {
+    "n8n-testkit": "./bin/n8n-testkit.js"
+  },
+  "files": [
+    "bin",
+    "src",
+    "test",
+    "esempi",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node test/esegui-test.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/perly-dev/n8n-testkit.git"
+  },
+  "bugs": {
+    "url": "https://github.com/perly-dev/n8n-testkit/issues"
+  },
   "homepage": "https://github.com/perly-dev/n8n-testkit#readme"
 }

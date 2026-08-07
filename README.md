@@ -138,9 +138,15 @@ assert on its parent object instead.
 | `matches` / `notMatches` | matches / does not match a regular expression |
 | `empty` / `notEmpty` | empty (`null`, `""`, `[]`) or not |
 | `oneOf` | equals one of the values in a list |
-| `between` | numeric, between `[min, max]` |
-| `greaterThan` / `lessThan` | numeric comparison |
+| `between` | finite number (or numeric string), between `[min, max]` |
+| `greaterThan` / `lessThan` | finite-number comparison; numeric strings are accepted |
 | `length` | `.length` equals `value` |
+
+Numeric operators deliberately do **not** use JavaScript's broad `Number()` coercion.
+Numbers and non-empty numeric strings such as `"42"`, `" 4.2 "`, or `"1e3"` are accepted,
+both in the result and in the expected threshold. Missing values, `null`, booleans, arrays,
+objects, empty strings, `NaN`, and infinities fail with a message naming the path and the bad
+value. This prevents a missing field from quietly becoming zero and satisfying a threshold.
 
 `why` is optional and worth writing. It is printed when the test fails, and it is what
 tells whoever finds a red build in six months *why* that value mattered.
@@ -166,15 +172,43 @@ passed here — not that n8n will accept the code.** The table is the honest bou
 |---|---|
 | `$input.all()` / `.first()` / `.last()` / `.item` | yes — but a branch or run index argument is refused, not ignored |
 | `$json`, `$itemIndex` (per-item mode) | yes |
-| `$('Node').all()` / `.first()` / `.last()` / `.itemMatching(i)` | yes, from the fixtures you pass under `nodes` |
+| `$('Node').all()` / `.first()` / `.last()` | yes, from the fixtures you pass under `nodes` |
+| `$('Node').itemMatching(i)` | **no** — fails explicitly instead of guessing by position |
 | `$('Node').item` | by **position**, not by `pairedItem` |
 | `$env`, `$vars`, `$runIndex`, `$execution`, `$workflow` | yes, from the test |
-| `$now`, `$today` | `toISO()`, `toMillis()`, `toString()` only — not Luxon |
+| `$now`, `$today` | `toISO()`, `toMillis()`, `toString()`, `valueOf()`; other access fails as unsupported Luxon |
 | `await` / async code | yes |
 | Run once for all items / for each item | yes, taken from the node |
-| `$helpers`, `this.helpers`, module imports | **no** |
+| default n8n global profile | yes for ordinary access; details below |
+| `$helpers`, `this.helpers` | **no** |
+| module imports | **no** — n8n's default deny-all module policy is reproduced |
 | Python Code nodes | **no** — listed as untestable |
-| n8n's own sandbox restrictions | **no** — see below |
+| n8n's isolation, timeouts and prototype restrictions | **no** — see below |
+
+### Default n8n global profile
+
+The Code node is compiled with a compatibility view of globals so Node itself cannot make a
+test green merely by offering more APIs than n8n. The profile starts from the ECMAScript
+globals in a blank VM context, then adds the native globals n8n currently supplies:
+`Buffer`, the timeout/interval/immediate functions and their clear functions, `atob`, `btoa`,
+the `TextEncoder`/`TextDecoder` families, and `FormData`.
+
+Other globals added by the Node version running the test are blocked when code reaches them.
+That includes `process`, `fetch`, and — depending on Node — APIs such as `URL`, web streams,
+`structuredClone`, `performance`, and the web crypto global. Direct identifiers and access
+through `globalThis`, n8n's `global` alias, or top-level `this` get the same explicit error.
+Locally declared variables with those names are left alone.
+
+`require` exists, as it does in n8n, but every call fails under this kit's default profile:
+n8n disables built-in and external modules unless a self-hosted administrator allowlists
+them. Aliasing the function (`const load = require; load('node:fs')`) is still caught, as are
+dynamic `import()` calls. This kit does not accept a module allowlist, install modules, or try
+to reproduce a particular self-hosted override.
+
+This is a **compatibility check, not a security boundary**. It covers ordinary identifier and
+global-object access. It does not try to defeat hostile reflective code using function
+constructors, indirect evaluation, prototype tricks, or other sandbox escapes; it does not
+freeze prototypes or stop infinite loops. Run only workflows you trust.
 
 Verified against the documented behaviour of the JavaScript Code node and against the
 workflow exports in `esempi/`. It is **not** verified against a running n8n instance, so
@@ -193,21 +227,26 @@ Read this before you trust it.
 - **Tests live beside the workflow, not inside it.** Renaming a node you test fails the test
   loudly, but a field you never assert on can change under you and stay green. Same
   discipline as any test suite.
-- **It is not a sandbox, and it is not n8n's runtime.** Your workflow's code runs in this
-  process, with whatever Node can reach: the network, the environment, the filesystem. n8n's
-  Code node is more restricted than that, so code can pass here and still be refused there.
-  What this checks is your logic, not that the runtime will allow it. See *Use it in CI*.
+- **It is not a sandbox, and it is not n8n's runtime.** The default global profile catches
+  normal access to Node-only APIs, but your workflow's code still runs in this process. It is
+  not designed to contain adversarial code, and reflective JavaScript can escape a
+  compatibility shim and reach the environment, network, or filesystem. See *Use it in CI*.
 - **`$now` and `$today` are small stand-ins**, not Luxon: `toISO()`, `toMillis()`,
-  `toString()`. `$today` is midnight UTC of the same day. **Luxon arithmetic (`plus`,
-  `diff`, `startOf`) is not supported** — a node that uses it cannot be tested here.
+  `toString()`, and `valueOf()`. `$today` is midnight UTC of the same day. Any other property
+  or method produces an explicit unsupported-Luxon error. Arithmetic (`plus`, `minus`),
+  zones, `startOf`, `diff`, and formatting are not approximated: correct results depend on
+  Luxon's calendar, timezone, locale, and DST semantics, which a zero-dependency Date wrapper
+  cannot reproduce honestly.
 - **It runs JavaScript Code nodes only.** Python Code nodes are listed as untestable rather
   than run. Both modes work — *run once for all items* and *run once for each item* — and
   the mode is taken from the node itself, not from your test.
-- **Item linking is not reproduced.** `$('Other node').itemMatching(i)` returns the item at
-  position `i` of the fixture you supplied, and `.item` returns the one at the current
-  position — neither traverses `pairedItem` the way n8n does. In a one-to-one chain that
-  preserves order the answer is the same. Anywhere a node filters, reorders or fans out it
-  is not, and a node that relies on linking cannot be tested faithfully here.
+- **Item linking is not reproduced.** `$('Other node').item` still returns the item at the
+  current position, which is useful only for a one-to-one chain that preserves order.
+  `itemMatching(i)` now fails explicitly: n8n resolves it by traversing `pairedItem` through
+  intermediate nodes, runs, branches and inputs, while `nodes` fixtures are only output
+  snapshots. A `pairedItem` number without that execution graph is not enough to identify
+  the named ancestor honestly. Use `.all()[i]` only when position is the behaviour you mean;
+  a node that relies on linking must be tested in n8n.
 
 ## Use it in CI
 
@@ -223,10 +262,11 @@ thing you cannot have.
 Non-zero exit on failure is the whole point: put it in front of the step that imports the
 workflow into production, and a regression stops there instead of in a customer's inbox.
 
-⚠️ **A workflow file is executable code.** This runs the Code nodes in the current process,
-so a workflow can read your CI environment — secrets included — and reach the network. Run
-it on workflows you trust, the way you already treat your own repository. Do not run it on
-workflow files that arrive from forks or untrusted pull requests.
+⚠️ **A workflow file is executable code.** This runs the Code nodes in the current process.
+The compatibility profile is not containment: hostile reflective code may still read your CI
+environment — secrets included — or reach the network and filesystem. Run it on workflows
+you trust, the way you already treat your own repository. Do not run it on workflow files
+that arrive from forks or untrusted pull requests.
 
 ## Licence
 
