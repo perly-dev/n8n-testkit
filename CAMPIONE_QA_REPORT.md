@@ -1,140 +1,110 @@
-# QA delivery report — secure n8n lead intake
+# Lead-intake workflow — QA report
 
-**Assessment date:** 2026-08-08  
-**System under test:** `Capture and clean inbound web form leads with a secure webhook`  
-**Scope:** deterministic JavaScript in the workflow's five Code nodes  
-**Status:** conditional pass — the Code-node regression baseline passes; one open integration-contract defect was reproduced; the live n8n path was not executed
+Date: 8 August 2026
 
-## What was delivered
+Scope: deterministic JavaScript in the five n8n Code nodes in `qa-sample/lead-intake.workflow.json`.
 
-| Item | Result |
-|---|---|
-| Frozen workflow export | SHA-256 `55e4f029fbbb4c03ccfa32c86016e3c62af1141727886f096ee1de1ed5bc0e61` |
-| Executable suite | 21 cases: 38 output assertions plus 2 expected-error checks |
-| Assertion rationale | 38 of 38 output assertions contain `why`; both expected-error cases contain a test-level rationale |
-| Baseline | 21 of 21 cases passed; exit code `0` |
-| Mutation checks | 3 of 3 selected mutations were killed; every mutant exited `1` |
-| Open finding | The setup says to use `website` as the honeypot, but the classifier does not recognise `website` |
-| Test runner | n8n-testkit `0.2.0`, executed with Node `v24.18.0` |
+## Delivered
 
-The selected mutation result is not a claim of complete mutation coverage. It proves that the suite fails for three concrete regressions in three separate behaviours.
+- 21 named regression cases covering authentication, classification, normalisation, spreadsheet safety, and rejected-lead minimisation.
+- 3 controlled mutations, each detected by the suite with one failed case and process exit code 1.
+- 1 open F-02 requirement mismatch, 5 captured evidence logs, and `qa-sample/verify-evidence.mjs` to reproduce them.
 
-## Tested path
+## Failure map
 
-```text
-Webhook [not executed]
-  -> Refuse anything unsigned [tested]
-  -> Spot the junk, with a reason [tested]
-  -> Junk? [not executed]
-       -> rejected: Keep three fields, safely [tested]
-          -> Google Sheets / rejected [not executed]
-          -> webhook response [not executed]
-       -> accepted: Normalise the lead [tested]
-          -> Make it safe for a spreadsheet [tested]
-          -> Google Sheets / leads [not executed]
-          -> webhook response [not executed]
-```
+These are data failures that can leave an n8n execution green because the Code node still returns an item. “Detected” refers to the supplied 21-case suite unless the row explicitly names the separate open-finding suite.
 
-This boundary matters: a green result proves the selected Code-node outputs against fixtures. It does not prove routing, credentials, Google Sheets mapping, webhook behaviour, or n8n runtime compatibility.
+| Fault | What changes upstream or in the Code node | What arrives wrong downstream | Detected by this suite? |
+|---|---|---|---|
+| F-01 | The shared secret is missing, header casing/value handling changes, or the authentication gate is weakened. | Unauthorised submissions can become normal sheet rows; a valid submission can be dropped or its body changed at the gate. | **Yes.** Three cases cover a valid signature, a wrong signature, and no configured secret. |
+| F-02 | The setup/form contract calls `website` a honeypot while the classifier deliberately treats `website` as a legitimate business field. | In the current setup, bots that fill only `website` enter the accepted branch. A contrary code-only change would silently reject legitimate leads that supply their company site. | **Conflict, not resolved.** The main suite detects the false-positive version; the separate `[OPEN F-02]` suite detects the documented-honeypot version and currently fails. |
+| F-03 | Contact-route validation or the short-message rule changes, or the sender uses a phone without a usable email. | A callable phone-only lead is rejected, or an unreachable record is accepted for sales to action. | **Yes.** One case covers each direction. |
+| F-04 | A supported trap field is renamed, ignored, or no longer contributes a rejection reason. | Bot traffic enters the main leads sheet, or the rejected row no longer says why it was rejected. | **Yes for `_gotcha`.** A new form-side trap name is not detected unless a fixture is added. |
+| F-05 | Disposable-domain matching changes from suffix-aware matching to exact matching, or domain extraction changes. | `lead@mail.tempmail.com` is accepted, or the audit reason loses the matched domain. | **Yes for the supplied subdomain.** The suite does not establish that the provider list is current. |
+| F-06 | The first-contact threshold changes from more than two links, or link recognition becomes case-sensitive. | A three-link first message reaches the main leads sheet and its rejection reason is blank. | **Yes.** The case uses three uppercase `HTTPS://` links and checks both decision and reason. |
+| F-07 | The default-country trunk-zero policy changes, or the E.164 length cap is removed. | An Italian landline is stored as a different number, or a value longer than 15 digits is presented as callable. | **Yes.** Both behaviours have a case. |
+| F-08 | `0039` stops being recognised as an existing international prefix. | The default country code is added again, producing an uncallable `+3939...` number. | **Yes.** The case checks the final normalised number. |
+| F-09 | Name splitting or case conversion stops preserving whitespace-separated, hyphenated, or apostrophised tokens. | Sales and customer-facing replies receive visibly corrupted names; matching and duplicate review become inconsistent. | **Yes for the two supplied names.** Other scripts, particles, and naming conventions are outside the fixtures. |
+| F-10 | Email trimming/casing, company-domain extraction, or the free-mail list changes. | Exact-match lookups create duplicates, Gmail is reported as a company, or business-email routing is wrong. | **Yes for one corporate address and Gmail.** Other providers and address semantics are not covered. |
+| F-11 | The incoming form switches to the already-supported `comments` or `utm_source` aliases, or alias handling is removed. | The sales note is blank and campaign/partner attribution falls back to `web form`. | **Yes.** Both canonical outputs are checked. |
+| F-12 | A downstream normalisation edit overwrites an earlier `received_at` value. | Response-time and ordering metrics use processing time instead of ingestion time. | **Yes.** A fixed upstream timestamp must survive unchanged. |
+| F-13 | Protection for leading spreadsheet control characters is weakened or applied to the wrong fields. | User-controlled text is interpreted by Google Sheets instead of stored as text, or ordinary values are altered. | **Partly.** `=`, `+`, `-`, and `@` are exercised at the top level; tab and carriage-return prefixes are implemented but not asserted. |
+| F-14 | Recursive spreadsheet neutralisation stops at the first object level or skips arrays. | A formula string inside `metadata.note` or `metadata.tags` reaches an auto-mapped column unescaped. | **Yes.** Nested object, dangerous array member, and safe array member are checked. |
+| F-15 | Rejected-item projection, reason neutralisation, or the email length bound changes. | The rejected sheet retains message/phone data, evaluates a formula in the reason, or accepts unbounded attacker-controlled email text. | **Yes for the stated fields and the 200-character email cap.** Other field-specific size limits are not covered. |
 
-## Open finding F-02 — documented honeypot is not connected
+## The 21 assertions
 
-The workflow's setup note instructs the operator to add a hidden field named `website`. The classifier explicitly excludes `website` from its supported trap names and accepts only:
+The CLI counts 21 named test cases. Those cases contain 40 individual `expect` or `throws` checks. The order below is grouped by defended fault; the captured baseline later in this report preserves execution order.
 
-```js
-const TRAPPOLE = ['_gotcha', 'hp_field', 'nickname_confirm'];
-```
+### F-01 — authentication boundary
 
-Consequently, a bot that fills the documented hidden field can receive `junk: false` when its other fields satisfy the acceptance rules. The workflow execution remains green and the row follows the accepted-lead path.
+1. **A correctly signed payload crosses the gate unchanged.** A valid lead must neither disappear nor be rewritten while its header is checked.
+2. **A wrong shared secret is refused.** Otherwise an unauthorised caller can create a normal-looking lead row.
+3. **No configured secret fails closed.** A deployment omission must stop ingestion rather than disable authentication.
 
-Reproduction against the unmodified workflow:
+### F-02 — `website` field semantics
 
-```bash
-NO_COLOR=1 node bin/n8n-testkit.js qa-sample/findings/f02-honeypot-doc-mismatch.tests.json
-```
+4. **A legitimate website field is not treated as a honeypot.** This prevents qualified business leads from being discarded and also checks an empty rejection reason and an ISO receipt timestamp.
 
-Exact captured output:
+### F-03 — usable contact route
 
-```text
-../lead-intake.workflow.json
+5. **A phone-only call request remains a usable lead.** A seven-or-more-digit phone is a valid reply route even with a short message and unusable email.
+6. **A submission with no usable contact route is rejected.** Sales must not receive an ordinary row that nobody can answer, and the audit row must name the contact-data failure.
 
-  ✗ [OPEN F-02] the documented website honeypot rejects a filled submission
-      0.json.junk  expected true (equals), got false
-      the bundled setup tells the operator to use website as the hidden bot
-      field, but the classifier does not recognise that field
+### F-04 — supported honeypot
 
-  1 of 1 failed
+7. **A filled supported honeypot is rejected with an auditable reason.** The `_gotcha` value must divert the item and state the cause instead of letting bot traffic blend into accepted leads.
 
-EXIT_CODE=1
-```
+### F-05 — disposable-email subdomains
 
-Required correction: keep `website` available as a legitimate business field and change the setup instruction and form integration to use one supported hidden field, preferably `_gotcha`. The Code node and form producer must use the same name. This report does not modify the source workflow.
+8. **A disposable-email subdomain is rejected.** Suffix-aware matching must catch `mail.tempmail.com`, and the stored reason must identify the domain for review.
 
-## Silent-failure map
+### F-06 — first-contact link limit
 
-Likelihood is qualitative because no production payload samples, execution logs, or change history were supplied. “High” means the condition already exists or is a normal configuration/edit path; “medium” means a common payload or business-rule change; “low” means a less common shape or requires another transformation.
+9. **Three uppercase-scheme links trigger the first-contact limit.** Case-insensitive counting must reject the third link and record the observed count.
 
-| ID | What changes upstream | Concrete downstream result while execution can remain green | Likelihood and reason | Does this suite catch it? |
-|---|---|---|---|---|
-| F-01 | The shared-secret guard is weakened, the header name/case changes, or the deployment variable disappears | An unauthorised payload reaches the lead sheet, or a valid payload never reaches classification | Medium: proxy/header and deployment-variable changes occur during moves between Cloud, self-hosted, and gateways | **Partly.** Correct title-case header, wrong secret, and missing secret are checked. It does not exercise the Webhook node or proxy. |
-| F-02 | The form follows the bundled instruction and uses hidden `website` | A bot-filled `website` field is ignored; the row reaches the accepted `leads` branch | **Certain when the supplied setup is followed:** documentation and code disagree now | **No.** The open reproduction proves the mismatch. The passing suite separately protects legitimate visible `website` values from false rejection. |
-| F-03 | Contact fields become nested, are renamed, or a brief phone-only request arrives | The accepted row has no usable email/phone, or a valid “Call me” lead is written to `rejected` | Medium: form builders commonly change field names; phone-only forms are normal | **Partly.** Existing `phone`/`telephone` rules, phone-only acceptance, and no-contact rejection are checked. New names and nested objects are not. |
-| F-04 | A supported honeypot is removed from the list or stops contributing a rejection reason | Bot rows enter `leads`, or rejected rows lose the reason needed for review | Medium: trap names are configuration, not a protocol | **Yes** for `_gotcha` and the exact reason. It does not inspect the actual form field configuration. |
-| F-05 | A disposable provider uses a subdomain, or a new disposable provider appears | A throwaway address receives `junk: false` and is presented as an accepted lead | Medium: provider lists age continuously | **Partly.** A known provider subdomain is checked. Providers absent from the hard-coded list are not detectable without updating fixtures/data. |
-| F-06 | URL case handling or the maximum-link constant changes; senders use `www.`, Markdown links, or shorteners | A link wall is written to the main leads sheet with no rejection reason | Medium: thresholds are edited manually and URL representations vary | **Partly.** Three `HTTPS://` links must be rejected and the count recorded. `www.`, Markdown, redirects, and reputation are not checked. |
-| F-07 | The local-number trunk-zero policy changes, the default country is wrong, or the form serialises a phone as a number | `02 1234567` becomes `+3921234567`; a non-Italian local number gains `+39`; a leading zero lost before this node cannot be recovered | High for international deployments; medium for numeric serialisation | **Partly.** Italian trunk-zero retention and the E.164 length ceiling are checked. The suite cannot recover digits already lost upstream or infer a caller's country. |
-| F-08 | `0039` is treated as a local prefix instead of an existing international prefix | The sheet stores an uncallable `+3939...` number | Medium: prefix-cleaning edits are compact and easy to regress | **Yes** for the supplied Italian fixture. Other country-prefix semantics are not covered. |
-| F-09 | Name casing/splitting logic changes, or a name does not follow “first token / remaining surname” | CRM columns contain corrupted compound names or semantically swapped names; personalisation uses the wrong name | High for an international customer base | **Partly.** Hyphen, apostrophe, whitespace, and `de rossi` casing are checked. The suite cannot determine a person's culturally correct given/family-name boundary. |
-| F-10 | The free-mail list changes or omits an alias/provider | `business_email` becomes true and `company_domain` is populated for a free-mail address, altering qualification/account reports | Medium: a static provider list becomes stale | **Partly.** Gmail and one corporate domain are checked. `googlemail.com`, regional aliases, and future providers are not. |
-| F-11 | `comments`/`utm_source` is renamed, nested, or becomes an object/array | The sheet receives a blank message/source or the literal string `[object Object]`; attribution becomes `web form` | Medium: marketing forms and tag-manager payloads change shape | **Partly.** `comments`, `utm_source`, and whitespace normalisation are checked. No schema guard rejects objects, arrays, or new field names. |
-| F-12 | Receipt time is dropped, replaced later in the chain, invalid, or generated from a wrong host clock | Lead ordering and response-time metrics use the wrong instant while the row still appends | Low to medium: clock faults are uncommon; field overwrites are easy | **Partly.** ISO shape at classification and preservation in normalisation are checked. Clock correctness and timezone semantics are not. |
-| F-13 | Formula-prefix protection is removed or narrowed | A value beginning with `=`, `+`, `-`, or `@` reaches the Sheets node as active input instead of plain text | Medium: the source is public, attacker-controlled form data | **Yes** at Code-node output for the four prefixes and a safe control value. Whether Google Sheets interprets the final value is not executed. |
-| F-14 | Recursive cleaning stops traversing objects or arrays | A nested formula survives and can become active if a later mapper flattens or serialises that value into a user-entered cell | Low to medium: nested payload expansion is less common but easy during enrichment | **Yes** for one object and one array member. Downstream flattening behaviour is not tested. |
-| F-15 | Rejected-row projection is broadened, formula protection is removed, or attacker-controlled email length becomes unbounded | Phone/message data leaks into the audit sheet, a reason becomes active input, or a single row contains oversized text | Medium: auto-mapped payloads tend to expand when fields are added | **Yes** for the exact three-field object, protected reason, and 200-character email bound. The Sheets node is not executed. |
-| F-16 | The IF branches are swapped, a connection is rewired, a sheet tab/mapping changes, or the response is taken from the wrong branch | Good leads land in `rejected`, junk lands in `leads`, or columns receive the wrong values even though Code-node tests stay green | High during canvas edits; these nodes are outside this runner | **No.** n8n-testkit does not follow connections or execute IF, Sheets, Webhook, or Respond nodes. |
-| F-17 | The form, proxy, or n8n retries the same delivery | Identical rows are appended more than once and sales sees duplicate leads | Medium: webhook retries are a normal delivery behaviour | **No.** The workflow contains no idempotency key or deduplication stage; the runner does not model repeated end-to-end executions. |
-| F-18 | Email syntax remains superficially valid but the domain/mailbox is not reachable | An unreachable contact is accepted and appears actionable | Medium: regex syntax is not mailbox validation | **No.** The workflow intentionally performs no DNS, MX, or mailbox check, and the test runner makes no network calls. |
+### F-07 — phone validity
 
-## Executable test suite
+10. **An Italian landline keeps its trunk zero.** Removing that zero changes `+39 02...` into a different number.
+11. **A number beyond the E.164 digit limit is not stored as callable.** More than 15 digits must produce an empty normalised phone, not a plausible-looking invalid value.
 
-The complete suite is `qa-sample/lead-intake.qa.tests.json`. It is delivered as executable JSON rather than duplicated into this report, so the reviewed assertions and the rerun assertions cannot drift apart.
+### F-08 — existing international prefix
 
-| Failure IDs | Cases | Output assertions | Behaviour fixed by the contract |
-|---|---:|---:|---|
-| F-01 | 3 | 2 plus 2 `throws` checks | Valid signed payload is unchanged; wrong or absent secret fails closed |
-| F-02 | 1 | 3 | Legitimate `website` is accepted; reason is empty; receipt time has ISO shape |
-| F-03 | 2 | 3 | Phone-only lead is accepted; unreachable submission is rejected with cause |
-| F-04 | 1 | 2 | `_gotcha` rejects and records the honeypot cause |
-| F-05 | 1 | 2 | Disposable subdomain rejects and records the matched domain |
-| F-06 | 1 | 2 | Three uppercase-scheme links reject and record the count |
-| F-07 | 2 | 2 | Italian trunk zero survives; over-15-digit phone is not stored as callable |
-| F-08 | 1 | 1 | `0039` becomes one `+39`, not `+3939` |
-| F-09 | 1 | 3 | Compound/apostrophised names retain the defined readable casing |
-| F-10 | 2 | 5 | Corporate/free-mail classification and normalised domain remain stable |
-| F-11 | 1 | 2 | `comments` and `utm_source` populate canonical columns |
-| F-12 | 1 | 1 | Existing receipt timestamp is preserved |
-| F-13 | 1 | 5 | Four spreadsheet control prefixes are neutralised; safe input is unchanged |
-| F-14 | 1 | 3 | Nested object and array strings are neutralised recursively |
-| F-15 | 2 | 2 | Rejected log has exactly three fields and a bounded email |
-| **Total** | **21** | **38 plus 2 `throws` checks** | |
+12. **A `0039` international number is not prefixed twice.** It must normalise to `+39021234567`, not an uncallable `+3939...` value.
 
-All 38 objects under `expect` contain a human-readable `why`. n8n-testkit 0.2.0 does not print a custom `why` for `throws` tests; it prints its built-in explanation when a node stops throwing. The two `throws` cases retain a test-level rationale in the JSON, but that field is not rendered by the current CLI. This is a reporting gap in the product.
+### F-09 — readable names
 
-The suite is compatible with the 0.2.0 boundaries named in the brief:
+13. **Compound and apostrophised names remain readable.** `Anna-Maria`, `De Rossi`, and `O'Brien` verify the separators and surname tokens that would otherwise be visibly corrupted.
 
-- it makes no numeric comparison against missing/non-numeric data;
-- it does not use blocked Node-only globals;
-- it does not use `itemMatching()` or assume positional item linkage;
-- it uses `length` only for the explicit 200-character rejected-email bound;
-- it runs the five discoverable JavaScript Code nodes and no Python node.
+### F-10 — email and company classification
 
-Baseline command:
+14. **A corporate email is normalised and classified by domain.** Trimming and lowercasing prevent duplicate lookups, while the derived domain and business flag drive account routing.
+15. **Gmail is not presented as a company domain.** A free-mail address must not create a fictional company account or receive a business-email flag.
 
-```bash
-NO_COLOR=1 node bin/n8n-testkit.js qa-sample/lead-intake.qa.tests.json
-```
+### F-11 — input aliases
 
-Exact captured output:
+16. **`comments` and `utm_source` aliases reach their canonical columns.** Common form field names must not become a blank sales note or generic attribution.
+
+### F-12 — ingestion time
+
+17. **An upstream receipt timestamp is preserved.** Replacing it later would change response-time and ordering metrics without causing an execution error.
+
+### F-13 — top-level spreadsheet controls
+
+18. **Spreadsheet control prefixes are neutralised.** Leading `=`, `+`, `-`, and `@` values must become text while an ordinary email remains unchanged.
+
+### F-14 — recursive spreadsheet controls
+
+19. **Spreadsheet neutralisation reaches nested objects and arrays.** Dangerous nested strings must be escaped and a safe array member must remain unchanged.
+
+### F-15 — rejected-lead minimisation
+
+20. **Rejected-lead logging keeps only the audit fields.** The rejected row must contain timestamp, email, and protected reason—not message and phone data.
+21. **Rejected email storage is bounded.** Attacker-controlled email text must be truncated to 200 characters before it reaches the rejected sheet.
+
+## Mutation evidence
+
+The three mutations are generated by `qa-sample/mutations/build-mutations.mjs`. The unmodified workflow is the common “before” state for all three mutations. The following baseline is copied from `qa-sample/evidence/baseline.txt`:
 
 ```text
 lead-intake.workflow.json
@@ -166,60 +136,30 @@ lead-intake.workflow.json
 EXIT_CODE=0
 ```
 
-## Mutation evidence
-
-The generator `qa-sample/mutations/build-mutations.mjs` refuses to write a mutant unless its target occurs exactly once. The mutation workflows are derived from the frozen workflow at rerun time.
-
 ### M-01 — remove the Italian trunk zero
 
-Exact edit:
+Injected change: `TOGLI_ZERO_INIZIALE` changes from `false` to `true`.
 
-```diff
--const TOGLI_ZERO_INIZIALE = false;
-+const TOGLI_ZERO_INIZIALE = true;
-```
-
-Command:
-
-```bash
-NO_COLOR=1 node bin/n8n-testkit.js qa-sample/mutations/m01-leading-zero.tests.mjs
-```
-
-Exact failure block:
+Exact failing section and summary copied from `qa-sample/evidence/m01-leading-zero.txt` (passing lines omitted):
 
 ```text
   ✗ [F-07] an Italian landline keeps its trunk zero
       0.json.phone  expected "+39021234567" (equals), got "+3921234567"
       for Italian landlines the zero is part of the callable international
       number; removing it stores a different number
-```
 
-Exact end-of-run summary:
-
-```text
   1 of 21 failed
 
 EXIT_CODE=1
 ```
 
-The other 20 test cases passed; the complete unedited output is in `qa-sample/evidence/m01-leading-zero.txt`.
+Result: the mutation is detected by F-07 and the process exits non-zero.
 
-### M-02 — allow three links instead of two
+### M-02 — raise the accepted-link threshold
 
-Exact edit:
+Injected change: `MAX_LINK` changes from `2` to `3`.
 
-```diff
--const MAX_LINK = 2;
-+const MAX_LINK = 3;
-```
-
-Command:
-
-```bash
-NO_COLOR=1 node bin/n8n-testkit.js qa-sample/mutations/m02-link-threshold.tests.mjs
-```
-
-Exact failure block:
+Exact failing section and summary copied from `qa-sample/evidence/m02-link-threshold.txt` (passing lines omitted):
 
 ```text
   ✗ [F-06] three uppercase-scheme links trigger the first-contact limit
@@ -229,98 +169,125 @@ Exact failure block:
       0.json.junk_reason  expected "3 links in a first message" (contains), got ""
       the stored reason must state the observed count so the rejection can be
       reviewed
-```
 
-Exact end-of-run summary:
-
-```text
   1 of 21 failed
 
 EXIT_CODE=1
 ```
 
-The other 20 test cases passed; the complete unedited output is in `qa-sample/evidence/m02-link-threshold.txt`.
+Result: the mutation is detected by F-06 and the process exits non-zero.
 
 ### M-03 — stop sanitising array members
 
-Exact edit:
+Injected change: array handling changes from `return v.map(ripulisci)` to `return v`.
 
-```diff
--if (Array.isArray(v)) return v.map(ripulisci);
-+if (Array.isArray(v)) return v;
-```
-
-Command:
-
-```bash
-NO_COLOR=1 node bin/n8n-testkit.js qa-sample/mutations/m03-nested-array.tests.mjs
-```
-
-Exact failure block:
+Exact failing section and summary copied from `qa-sample/evidence/m03-nested-array.txt` (passing lines omitted):
 
 ```text
   ✗ [F-14] spreadsheet neutralisation reaches nested objects and arrays
       0.json.metadata.tags.1  expected "'=CMD()" (equals), got "=CMD()"
       array members require the same recursive protection as top-level strings
-```
 
-Exact end-of-run summary:
-
-```text
   1 of 21 failed
 
 EXIT_CODE=1
 ```
 
-The other 20 test cases passed; the complete unedited output is in `qa-sample/evidence/m03-nested-array.txt`.
+Result: the mutation is detected by F-14 and the process exits non-zero.
 
-## Limits of this delivery
+These checks show that the unmodified suite can go green and that three independent, relevant regressions make it go red with exit code 1. They do not establish mutation coverage for every assertion or every possible edit.
 
-This suite does **not** establish any of the following:
+## Open finding: F-02 honeypot documentation mismatch
 
-1. **End-to-end execution.** It does not call the Webhook, IF, Google Sheets, or Respond to Webhook nodes and does not traverse workflow connections.
-2. **Live credentials or destination correctness.** It cannot show that the credential works, the spreadsheet ID is correct, the `leads` and `rejected` tabs exist, or auto-mapped columns match the sheet.
-3. **Branch wiring.** A canvas edit can swap the true/false IF outputs while every Code-node test remains green.
-4. **n8n runtime equivalence.** n8n-testkit is a compatibility shim. Passing here is not proof that the installed n8n version accepts and executes the code identically.
-5. **Production payload coverage.** Fixtures were derived from the exported workflow's stated contract, not sampled from real webhook traffic. Unknown aliases, nested fields, objects, arrays, and producer-specific nulls remain open.
-6. **Phone-number truth.** The suite protects the declared Italian default; it cannot infer country, validate reachability, retain a zero already lost before JSON serialisation, or split extensions safely.
-7. **Identity semantics.** Formatting checks do not prove that a person's first and last names were split according to their culture or preference.
-8. **Email reachability and provider freshness.** Regex shape, DNS/MX, mailbox existence, disposable-domain freshness, and the complete free-mail-provider set are outside the suite.
-9. **Idempotency, retries, ordering, and concurrency.** Repeated webhook delivery can append duplicates; concurrent executions and rate limits are not simulated.
-10. **Clock correctness.** The workflow uses `new Date()`, not fixture-controlled `$now`. The suite checks ISO shape and timestamp preservation, not host-clock accuracy.
-11. **Actual spreadsheet interpretation.** The suite verifies the apostrophe-prefixed output. It does not send the value to Google Sheets and inspect the resulting cell type/formula state.
-12. **Exhaustive mutation coverage.** Three selected mutations prove three failure paths. They do not measure every conditional, operator, branch, or possible edit.
-13. **Security containment.** The runner executes trusted workflow JavaScript in its own process. This review is not a sandbox or an adversarial-code audit.
-14. **Custom rationale rendering for expected errors.** n8n-testkit 0.2.0 does not render a custom `why` for a `throws` expectation.
+### What it is
 
-## Re-run from a clean checkout
+The workflow’s setup note tells the operator to add an empty hidden field named `website`. The classifier’s Code node explicitly excludes `website` from its trap list because many forms use it as a legitimate company-site field. It recognises `_gotcha`, `hp_field`, and `nickname_confirm` instead.
 
-Run from the `n8n-testkit` repository root:
+The result is a contract mismatch: a bot that fills the documented `website` trap is not rejected for that field. The separate finding suite proves the current behaviour. This output is copied from `qa-sample/evidence/f02-open-honeypot-mismatch.txt`:
 
-```bash
-node --version
-node bin/n8n-testkit.js --version
-shasum -a 256 qa-sample/lead-intake.workflow.json qa-sample/lead-intake.qa.tests.json
-node qa-sample/verify-evidence.mjs
-NPM_CONFIG_CACHE=/tmp/n8n-testkit-npm-cache npm test
+```text
+../lead-intake.workflow.json
+
+  ✗ [OPEN F-02] the documented website honeypot rejects a filled submission
+      0.json.junk  expected true (equals), got false
+      the bundled setup tells the operator to use website as the hidden bot
+      field, but the classifier does not recognise that field
+
+  1 of 1 failed
+
+EXIT_CODE=1
 ```
 
-`verify-evidence.mjs` rebuilds all three mutation workflows, executes the baseline, executes the open-finding reproduction, executes all three mutation suites, writes the raw outputs under `qa-sample/evidence/`, and fails if any exit code differs from the expected result.
+### Why it matters
 
-The isolated npm cache in the final command avoids relying on the machine's user-level npm cache. It does not alter test semantics.
+The workflow can be deployed exactly as documented and still accept submissions that the operator believes the honeypot will reject. n8n will show a green execution because the classifier returns a valid item; the defect is only in the classification result. Treating `website` as a trap without changing the form contract creates the opposite failure: real leads with a company website are silently rejected.
 
-## Artifact manifest
+### Required client action
 
-| Path | Purpose |
-|---|---|
-| `qa-sample/lead-intake.workflow.json` | Frozen workflow under review |
-| `qa-sample/lead-intake.qa.tests.json` | Executable 21-case suite |
-| `qa-sample/findings/f02-honeypot-doc-mismatch.tests.json` | Reproduction for the open setup/code mismatch |
-| `qa-sample/mutations/build-mutations.mjs` | Deterministic mutation generator |
-| `qa-sample/mutations/*.tests.mjs` | The same suite pointed at each mutant |
-| `qa-sample/evidence/*.txt` | Complete raw CLI outputs including exit codes |
-| `qa-sample/verify-evidence.mjs` | One-command evidence verifier |
+Choose one meaning for `website` and make the form, setup note, classifier, and tests agree before relying on the honeypot:
 
-## Release decision
+- Recommended when the form has a legitimate website field: change the hidden field in the setup instructions and form to `_gotcha` (or another name already in `TRAPPOLE`), keep the baseline F-02 case, and change the open finding into a passing contract test for that chosen field.
+- If `website` is guaranteed to be hidden and never a customer field: add it to `TRAPPOLE`, replace the baseline F-02 expectation, and document that the public form must not expose a legitimate field with the same name.
 
-Do not present this workflow as fully QA-approved until F-02 is corrected and a live n8n smoke test confirms both IF branches, both sheet destinations, their column mappings, and both webhook responses. The deterministic Code-node baseline is protected by the delivered suite.
+The current report does not mark F-02 resolved.
+
+## Declared limits
+
+- The suite executes JavaScript Code nodes in isolation. It does not execute the Webhook, If, Google Sheets, or Respond to Webhook nodes and does not follow workflow connections.
+- There is no live n8n run. Runtime compatibility, node-version behaviour, webhook activation, proxy/header handling, routing, response status/body, and item-linking are not verified here.
+- Google Sheets credentials, spreadsheet ID, tab names, column mappings, permissions, append behaviour, and `USER_ENTERED` behaviour are not exercised against Google Sheets.
+- A passing case proves only the supplied fixture and asserted paths. Unasserted fields can change while the suite stays green.
+- F-02 remains an unresolved form/documentation/code contract mismatch; the 21-case baseline is green because it protects the legitimate-website interpretation.
+- Authentication coverage checks Code-node decisions, not transport security, secret strength/rotation, replay protection, rate limiting, timing behaviour, or webhook URL exposure.
+- Spam checks are examples, not a complete spam model. The disposable-domain list can become stale, new honeypot names are not discovered automatically, and link/message heuristics can have untested false positives and false negatives.
+- Email syntax is checked only by the workflow’s regular expression. Deliverability, MX records, mailbox existence, aliases, and deduplication are not tested.
+- Phone coverage is centred on the declared Italian `+39` default, `0039`, and the 15-digit E.164 ceiling. Other national trunk rules, extensions, emergency/service numbers, and number validity are not established.
+- Name coverage is limited to the supplied Latin-script examples. International naming conventions, Unicode normalisation, mononyms, and locale-specific casing are not established.
+- Spreadsheet-prefix tests cover `=`, `+`, `-`, and `@` at the top level and `=` in nested data. The implemented tab and carriage-return guards are not separately asserted, and no spreadsheet application is opened to confirm final cell interpretation.
+- Rejected rows are checked for three fields and a 200-character email cap. Retention periods, access controls, deletion, regulatory basis, and bounds on other strings are outside this suite.
+- Performance, load, concurrency, retries, duplicate delivery, partial integration failure, observability, alerts, rollback, and recovery are not tested.
+- The test runner is a compatibility shim, not an n8n security sandbox. Only trusted workflow files should be executed with it.
+
+## Reproduce the evidence
+
+Requirement: Node.js 18 or newer. From the repository root:
+
+```bash
+cd '/Users/stefano/Documents/Lavoro/ENTRATE AUTOMATICHE/Prodotti/n8n-testkit'
+node qa-sample/verify-evidence.mjs
+```
+
+The verifier rebuilds the three mutation workflows, runs the baseline, the open F-02 finding, and all three mutations, rewrites the five files under `qa-sample/evidence/`, and stops if any exit code differs from the expected result. A successful verifier run means:
+
+- baseline suite: exit 0;
+- open F-02 finding: exit 1;
+- M-01, M-02, and M-03: exit 1 each;
+- baseline evidence contains `21 of 21 passed`.
+
+To run each component directly:
+
+```bash
+# Expected exit: 0
+NO_COLOR=1 node bin/n8n-testkit.js qa-sample/lead-intake.qa.tests.json
+
+# Expected exit: 1 (open finding)
+NO_COLOR=1 node bin/n8n-testkit.js qa-sample/findings/f02-honeypot-doc-mismatch.tests.json
+
+# Rebuild mutation workflow files before mutation runs
+node qa-sample/mutations/build-mutations.mjs
+
+# Expected exit: 1 for each mutation
+NO_COLOR=1 node bin/n8n-testkit.js qa-sample/mutations/m01-leading-zero.tests.mjs
+NO_COLOR=1 node bin/n8n-testkit.js qa-sample/mutations/m02-link-threshold.tests.mjs
+NO_COLOR=1 node bin/n8n-testkit.js qa-sample/mutations/m03-nested-array.tests.mjs
+```
+
+An exit code of 1 is the expected success condition for the open finding and mutation demonstrations: those runs contain a deliberately unmet expectation or a deliberately broken workflow. The all-in-one verifier returns 0 only when every component produces its expected exit code.
+
+---
+
+## NOTE INTERNE — non consegnare
+
+**Verdict: yes, it is worth $149 if it is sold as regression testing for the Code nodes, not as end-to-end workflow certification.** The value is in the workflow-specific work: 21 cases with operational reasons, 40 individual checks, three mutations proving a non-zero failure exit, reproducible evidence, and one contract defect actually found.
+
+It is not worth $149 if the commercial promise is “the workflow is tested” without the node-level qualification. That claim requires at least: resolving F-02; importing into a compatible n8n instance; calling the real webhook; exercising both If branches; appending to a temporary sheet with real credentials and columns; checking HTTP responses; and testing credential errors, retries, and duplicate delivery. That would be a separate integration assessment.

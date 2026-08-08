@@ -1,8 +1,8 @@
 
 m03-nested-array.workflow.json
 
-  ✓ [F-01] a correctly signed payload crosses the gate unchanged (0ms)
-  ✓ [F-01] a wrong shared secret is refused (1ms)
+  ✓ [F-01] a correctly signed payload crosses the gate unchanged (1ms)
+  ✓ [F-01] a wrong shared secret is refused (0ms)
   ✓ [F-01] no configured secret fails closed (0ms)
   ✓ [F-02] a legitimate website field is not treated as a honeypot (0ms)
   ✓ [F-03] a phone-only call request remains a usable lead (0ms)
@@ -15,10 +15,10 @@ m03-nested-array.workflow.json
   ✓ [F-09] compound and apostrophised names remain readable (0ms)
   ✓ [F-10] a corporate email is normalised and classified by domain (0ms)
   ✓ [F-10] Gmail is not presented as a company domain (0ms)
-  ✓ [F-11] comments and utm_source aliases reach their canonical columns (0ms)
+  ✓ [F-11] comments and utm_source aliases reach their canonical columns (1ms)
   ✓ [F-12] an upstream receipt timestamp is preserved (0ms)
   ✓ [F-07] a number beyond the E.164 digit limit is not stored as callable (0ms)
-  ✓ [F-13] spreadsheet control prefixes are neutralised (1ms)
+  ✓ [F-13] spreadsheet control prefixes are neutralised (0ms)
   ✗ [F-14] spreadsheet neutralisation reaches nested objects and arrays
       0.json.metadata.tags.1  expected "'=CMD()" (equals), got "=CMD()"
       array members require the same recursive protection as top-level strings

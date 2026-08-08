@@ -1,15 +1,23 @@
 {
   "name": "n8n-testkit",
-  "version": "0.2.1",
-  "description": "Run the JavaScript in your n8n Code nodes against fixtures and fail the build when it regresses. Refuses what n8n refuses, instead of guessing.",
+  "version": "0.2.2",
+  "description": "Test n8n workflows in CI: runs the JavaScript in your Code nodes against fixtures and exits non-zero when the output regresses. No n8n instance, no credentials, zero dependencies.",
   "keywords": [
     "n8n",
+    "n8n-test",
+    "n8n-testing",
+    "n8n-workflow",
+    "test",
     "testing",
     "regression",
-    "workflow",
+    "regression-testing",
+    "code-node",
+    "fixtures",
+    "assertions",
+    "workflow-testing",
     "ci",
     "automation",
-    "assertions"
+    "no-dependencies"
   ],
   "license": "MIT",
   "author": "perly-dev",

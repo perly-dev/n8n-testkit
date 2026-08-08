@@ -14,17 +14,17 @@ m01-leading-zero.workflow.json
       0.json.phone  expected "+39021234567" (equals), got "+3921234567"
       for Italian landlines the zero is part of the callable international
       number; removing it stores a different number
-  ✓ [F-08] a 0039 international number is not prefixed twice (1ms)
+  ✓ [F-08] a 0039 international number is not prefixed twice (0ms)
   ✓ [F-09] compound and apostrophised names remain readable (0ms)
   ✓ [F-10] a corporate email is normalised and classified by domain (0ms)
   ✓ [F-10] Gmail is not presented as a company domain (0ms)
   ✓ [F-11] comments and utm_source aliases reach their canonical columns (0ms)
   ✓ [F-12] an upstream receipt timestamp is preserved (0ms)
-  ✓ [F-07] a number beyond the E.164 digit limit is not stored as callable (0ms)
+  ✓ [F-07] a number beyond the E.164 digit limit is not stored as callable (1ms)
   ✓ [F-13] spreadsheet control prefixes are neutralised (0ms)
   ✓ [F-14] spreadsheet neutralisation reaches nested objects and arrays (0ms)
   ✓ [F-15] rejected-lead logging keeps only the audit fields (0ms)
-  ✓ [F-15] rejected email storage is bounded (1ms)
+  ✓ [F-15] rejected email storage is bounded (0ms)
 
   1 of 21 failed
 
